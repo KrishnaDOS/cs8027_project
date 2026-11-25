@@ -79,7 +79,10 @@ def main(argv: Sequence[str] | None = None) -> int:
           f"K={cfg.traffic.key_size_bits} bits)")
     print(f"SPR bottleneck: rho_bn={result.rho_bn:.4g}  rho_sat={result.rho_sat:.4g}  "
           f"(edge {result.info['bottleneck_edge']}, used by "
-          f"{result.info['bottleneck_share']:.1%} of pairs)")
+          f"{result.info['bottleneck_share']:.1%} of pairs"
+          f"{', a BRIDGE' if result.load.bottleneck_is_bridge else ''})")
+    print(f"bridges: n_bridges={result.load.n_bridges}  "
+          f"max_bridge_share={result.load.max_bridge_share:.3f}")
     print(format_summary(summary))
     if args.by_hops:
         with pd.option_context("display.width", 120, "display.max_rows", 200):

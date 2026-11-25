@@ -70,6 +70,10 @@ class LoadInfo:
         b_e is the fraction of the traffic's (s, d) pairs whose SPR path uses edge e.
     rho_sat: rho / rho_bn, the rho at which SPR's busiest link saturates.
     bottleneck_edge, bottleneck_share: argmax edge and its b_e.
+    n_bridges: number of bridge edges (removing one disconnects the graph). Traffic
+        across a bridge has no alternative path, so no router can relieve it.
+    max_bridge_share: max b_e over bridges (0 if there are none).
+    bottleneck_is_bridge: whether SPR's busiest edge is a bridge.
     """
 
     lambda_per_s: float
@@ -80,6 +84,9 @@ class LoadInfo:
     rho_sat: float
     bottleneck_edge: tuple[Any, Any]
     bottleneck_share: float
+    n_bridges: int
+    max_bridge_share: float
+    bottleneck_is_bridge: bool
 
 
 def spr_edge_shares(G: nx.Graph, pairs: list[tuple[Any, Any]]) -> dict[tuple[Any, Any], float]:
@@ -144,6 +151,8 @@ def resolve_arrival_rate(G: nx.Graph, cfg: TrafficConfig) -> LoadInfo:
         ((e, lam * k_bits * b / G.edges[e]["link"].rate_bps) for e, b in shares.items()),
         key=lambda item: item[1],
     )
+    bridges = {frozenset(e) for e in nx.bridges(G)}
+    bridge_shares = [b for e, b in shares.items() if frozenset(e) in bridges]
     return LoadInfo(
         lambda_per_s=lam,
         offered_load=rho,
@@ -153,6 +162,9 @@ def resolve_arrival_rate(G: nx.Graph, cfg: TrafficConfig) -> LoadInfo:
         rho_sat=rho / load,
         bottleneck_edge=edge,
         bottleneck_share=shares[edge],
+        n_bridges=len(bridges),
+        max_bridge_share=max(bridge_shares, default=0.0),
+        bottleneck_is_bridge=frozenset(edge) in bridges,
     )
 
 

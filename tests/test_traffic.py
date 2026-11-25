@@ -90,6 +90,28 @@ def test_bottleneck_diagnostic_on_chain() -> None:
     assert load2.rho_sat == pytest.approx(load.rho_sat)
 
 
+def test_bridge_diagnostics() -> None:
+    # Chain: every edge is a bridge; the busiest (1,2) carries 8/12 of ordered pairs.
+    G = attach_links(make_chain(4, 10.0), LinksConfig())
+    load = resolve_arrival_rate(G, TrafficConfig())
+    assert load.n_bridges == 3
+    assert load.max_bridge_share == pytest.approx(8 / 12)
+    assert load.bottleneck_is_bridge
+    # Ring of 6 plus a pendant node 6 hanging off node 0: one bridge, (0, 6).
+    R = nx.cycle_graph(6)
+    R.add_edge(0, 6)
+    nx.set_edge_attributes(R, 10.0, "length_km")
+    R = attach_links(R, LinksConfig())
+    load = resolve_arrival_rate(R, TrafficConfig())
+    assert load.n_bridges == 1
+    assert load.max_bridge_share == pytest.approx(2 * 1 * 6 / (7 * 6))  # pairs touching node 6
+    # No bridges at all -> share 0.
+    C = nx.cycle_graph(5)
+    nx.set_edge_attributes(C, 10.0, "length_km")
+    load = resolve_arrival_rate(attach_links(C, LinksConfig()), TrafficConfig())
+    assert (load.n_bridges, load.max_bridge_share, load.bottleneck_is_bridge) == (0, 0.0, False)
+
+
 def test_spr_edge_shares_sum_to_mean_hops() -> None:
     G = attach_links(make_chain(5, 10.0), LinksConfig())
     pairs = traffic_pairs(G, TrafficConfig())

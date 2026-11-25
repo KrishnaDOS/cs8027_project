@@ -276,3 +276,9 @@ Chen 2021 npj (Hefei 46-node network), Sasaki 2011 (Tokyo), Raubitzek 2026 (Aust
 - E3 varies topology seeds (it compares topology classes); SPR and KAR still share seeds.
 - Latency is always plotted alongside outage, because delivered-request latency suffers survivorship bias at high load.
 - Key utilization (network-wide and per-link) is reported for all experiments.
+
+## Addendum D — E2/E3 redesign and runner requirements (from M3 review)
+- E2 runs on two meshes: topology.seed=0 (default; bridge-dominated) and the "diverse" mesh chosen by scripts/select_mesh.py (lowest seed with max_bridge_share <= 0.15, chosen before any routing results are examined). Rationale: on seed 0 SPR and KAR tie because the busiest link is a bridge with no alternative path; routing gains depend on path diversity, which is a topology property. Report n_bridges and max_bridge_share for both meshes.
+- E3 rho changes from 0.6 to 0.3 (rho_sat ≈ 0.16 on degree-4 meshes, so 0.6 saturates everything). Topology seeds 0–4 per degree, paired SPR/KAR on identical seeds. Report n_bridges and max_bridge_share per degree.
+- E1 runs SPR only (SPR = KAR on a chain), plus one KAR run as a sanity check.
+- Runner writes one result file per run, supports resume, and offers --dry-run and --quick modes.

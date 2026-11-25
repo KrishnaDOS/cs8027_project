@@ -1,0 +1,15 @@
+name: e2_mesh_load
+description: >
+  SPR vs KAR vs offered load on two fixed meshes (n=30, 50 km, degree 4), Addenda C/D.
+  mesh0: topology.seed=0, the default mesh; bridge-dominated (SPR's busiest link is a bridge).
+  diverse: topology.seed=8, chosen by scripts/select_mesh.py (lowest seed in 0-49 with
+  max_bridge_share <= 0.15) before any routing results were examined.
+  The topology is fixed per mesh; run seeds vary traffic only; SPR and KAR share seeds.
+base: ../../configs/default.yaml
+seeds: [0, 1, 2, 3, 4]
+variants:
+  - {label: mesh0, set: {topology.seed: 0}}
+  - {label: diverse, set: {topology.seed: 8}}
+grid:
+  traffic.offered_load: [0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
+  routing.strategy: [spr, kar]

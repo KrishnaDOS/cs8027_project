@@ -81,6 +81,18 @@ class SimulationResult:
     def rho_sat(self) -> float:
         return self.load.rho_sat
 
+    @property
+    def n_bridges(self) -> int:
+        return self.load.n_bridges
+
+    @property
+    def max_bridge_share(self) -> float:
+        return self.load.max_bridge_share
+
+    @property
+    def bottleneck_is_bridge(self) -> bool:
+        return self.load.bottleneck_is_bridge
+
 
 def validate_for_run(cfg: Config) -> None:
     """Checks that only matter once a simulation starts."""
