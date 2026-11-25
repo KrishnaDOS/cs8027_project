@@ -41,6 +41,7 @@ routing:
 
 topology:
   type: random_mesh            # chain | secoqc | random_mesh
+  seed: null                   # null: topology drawn from each run seed; int: one fixed topology
   n_nodes: 30
   area_km: 50
   target_avg_degree: 4

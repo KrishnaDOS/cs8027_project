@@ -5,6 +5,7 @@ duration_s - warmup_s. Requests that arrive in the window but resolve after dura
 (at most timeout_s later) are still counted, so no arrival is silently dropped.
 Outage probability = outages / offered; no_path requests are counted separately (they
 cannot occur on a connected topology).
+Key utilization uses per-link counter snapshots at warmup_s and duration_s (same window).
 """
 
 from __future__ import annotations
@@ -42,8 +43,13 @@ def summarize(result: SimulationResult, cfg: Config) -> dict[str, Any]:
     def stat(fn, values: np.ndarray) -> float:
         return float(fn(values)) if len(values) else float("nan")
 
+    links = result.links
+    produced_bits = float(links["window_produced_bits"].sum())
+    link_util = links["window_utilization"].to_numpy()
+
     return {
         "seed": result.seed,
+        "topology_seed": result.topology_seed,
         "strategy": cfg.routing.strategy,
         "topology": cfg.topology.type,
         "n_nodes": result.info["n_nodes"],
@@ -53,6 +59,8 @@ def summarize(result: SimulationResult, cfg: Config) -> dict[str, Any]:
         "offered_load": result.offered_load,
         "lambda_per_s": result.lambda_per_s,
         "mean_spr_hops": result.mean_spr_hops,
+        "rho_bn": result.rho_bn,
+        "rho_sat": result.rho_sat,
         "total_rate_bps": result.total_rate_bps,
         "measured_duration_s": measured_s,
         "offered": n_offered,
@@ -69,6 +77,13 @@ def summarize(result: SimulationResult, cfg: Config) -> dict[str, Any]:
         "mean_attempts": stat(np.mean, r["n_attempts"].to_numpy()),
         "mean_fill_fraction": stat(np.mean, ts["mean_fill_fraction"].to_numpy()),
         "frac_links_below_k": stat(np.mean, ts["frac_links_below_k"].to_numpy()),
+        # Key utilization over [warmup_s, duration_s): consumed / produced (= generated +
+        # discarded), network-wide and per link.
+        "key_utilization": float(links["window_consumed_bits"].sum()) / produced_bits
+        if produced_bits > 0 else float("nan"),
+        "link_utilization_min": stat(np.nanmin, link_util),
+        "link_utilization_median": stat(np.nanmedian, link_util),
+        "link_utilization_max": stat(np.nanmax, link_util),
     }
 
 

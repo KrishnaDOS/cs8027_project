@@ -95,7 +95,7 @@ topologies.py (each builder returns an nx.Graph with edge attr "length_km" and o
 - make_random_mesh(n_nodes, area_km, target_avg_degree, rng)
   # Random geometric graph; radius chosen to hit the target average degree;
   # edge length = Euclidean distance between node positions.
-  # If the graph is disconnected, regenerate (max 100 tries), then fail loudly.
+  # If the graph is disconnected, regenerate (max 100 tries), then fail loudly. (superseded by Addendum B)
 - attach_links(G, cfg, rng) adds a KeyLink to every edge.
 
 routing.py
@@ -147,9 +147,9 @@ E1 chain_hops: chain n=32, uniform traffic, SPR; rho in {0.2, 0.5, 0.8}.
 E2 mesh_load: random mesh n=30, area 50 km, avg degree ~4; SPR vs KAR;
    rho in {0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2}.
    Plots: outage vs rho, throughput vs rho, p95 latency vs rho (one line per router).
-E3 mesh_density: fixed rho=0.6; n_nodes in {10, 20, 30, 40, 60} in a fixed 50 km area with a
-   fixed connection radius, so average degree grows with n; SPR vs KAR.
-   Plots: throughput vs n and outage vs n.
+E3 mesh_density: fixed rho=0.6; n_nodes in {10, 20, 30, 40, 60} in a fixed 50 km area with a (superseded by Addendum B)
+   fixed connection radius, so average degree grows with n; SPR vs KAR. (superseded by Addendum B)
+   Plots: throughput vs n and outage vs n. (superseded by Addendum B)
 E4 SECOQC: stretch item in M4 (real data available, see Addendum A.3). (updated per Addendum A)
 (Later, not this phase: E5 distance rate model.)
 
@@ -269,3 +269,10 @@ Chen 2021 npj (Hefei 46-node network), Sasaki 2011 (Tokyo), Raubitzek 2026 (Aust
 - Random meshes are generated once and repaired to connectivity by adding the shortest inter-component edges (G.graph["repair_edges"] records how many). This avoids the selection bias of reject-and-redraw, where only ~10% of n=30, degree-4 draws are connected.
 - E3 is redesigned: fixed n_nodes=30, 50 km area, target_avg_degree in {3, 4, 6, 8}, SPR vs KAR, rho=0.6. Plots: outage and throughput vs achieved average degree. A node-count sweep at fixed degree is an optional extra.
 - KeyLink tracks total_discarded_bits (key lost to a full pool) for later utilization analysis.
+
+## Addendum C — Experiment design changes (from M2 review)
+- rho stays normalized by total link rate (the primary axis). SPR concentrates traffic, so outage rises well below rho=1; this concentration is a topology effect to report, not remove. rho_bn and rho_sat are reported as diagnostics.
+- E2 rho grid: {0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0}. E2 uses one fixed mesh (topology.seed=0), varies traffic seeds only, and runs SPR and KAR on identical seeds so results can be paired.
+- E3 varies topology seeds (it compares topology classes); SPR and KAR still share seeds.
+- Latency is always plotted alongside outage, because delivered-request latency suffers survivorship bias at high load.
+- Key utilization (network-wide and per-link) is reported for all experiments.

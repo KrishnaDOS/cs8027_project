@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from qkdsim.config import Config, ConfigError, config_from_dict, deep_merge
+from qkdsim.config import Config, ConfigError, config_from_dict, deep_merge, load_config
 from qkdsim.metrics import by_hops, measured_records, summarize
 from qkdsim.run import main, parse_set_args
 from qkdsim.simulator import OUTCOMES, run_simulation
@@ -161,14 +161,106 @@ def test_key_larger_than_capacity_raises() -> None:
 
 def test_single_saturating_flow_on_chain_hits_link_rate() -> None:
     # Addendum A.4: an end-to-end flow is limited by its bottleneck link (all 5000 bps here).
+    # Fixed-pair rho is normalized by the path's bottleneck rate, so rho=2 is 2x demand.
     cfg = make_cfg(
         topology={"type": "chain", "n_nodes": 5},
-        traffic={"pair_mode": "fixed", "fixed_pair": [0, 4], "offered_load": None,
-                 "arrival_rate_per_s": 2 * 5000 / 256},  # demand = 2x link rate
+        traffic={"pair_mode": "fixed", "fixed_pair": [0, 4], "offered_load": 2.0},
         simulation={"duration_s": 200, "warmup_s": 60},  # initial pool drains in ~20 s
     )
-    summary = summarize(run_simulation(cfg, 0), cfg)
+    result = run_simulation(cfg, 0)
+    assert result.lambda_per_s == pytest.approx(2 * 5000 / 256)
+    summary = summarize(result, cfg)
     assert summary["delivered_throughput_bps"] == pytest.approx(5000, rel=0.03)
+    assert summary["rho_bn"] == pytest.approx(2.0)
+    assert summary["key_utilization"] == pytest.approx(1.0, rel=0.03)  # every link saturated
+
+
+# --------------------------------------------------------------------------- topology seed
+
+
+def test_topology_seed_fixes_graph_across_run_seeds() -> None:
+    cfg = make_cfg(topology={"seed": 7}, traffic={"offered_load": 0.3})
+    a, b = run_simulation(cfg, 1), run_simulation(cfg, 2)
+    assert a.topology_seed == b.topology_seed == 7
+    edges = ["u", "v", "length_km"]
+    pd.testing.assert_frame_equal(a.links[edges], b.links[edges])  # same graph
+    assert not a.records[["arrival_s", "src", "dst"]].equals(b.records[["arrival_s", "src", "dst"]])
+    assert summarize(a, cfg)["topology_seed"] == 7
+
+
+def test_topology_seed_unset_follows_run_seed() -> None:
+    cfg = make_cfg(traffic={"offered_load": 0.3})
+    a, b = run_simulation(cfg, 1), run_simulation(cfg, 2)
+    assert (a.topology_seed, b.topology_seed) == (1, 2)
+    assert not a.links[["u", "v", "length_km"]].equals(b.links[["u", "v", "length_km"]])
+    # Fixing topology.seed to the run seed reproduces the unset behaviour exactly.
+    same = run_simulation(make_cfg(topology={"seed": 1}, traffic={"offered_load": 0.3}), 1)
+    pd.testing.assert_frame_equal(a.records, same.records)
+
+
+# --------------------------------------------------------------------------- diagnostics
+
+
+def test_bottleneck_diagnostics_in_summary(loaded_run) -> None:
+    cfg, result = loaded_run
+    s = summarize(result, cfg)
+    assert s["rho_bn"] > 0
+    assert s["rho_sat"] == pytest.approx(s["offered_load"] / s["rho_bn"])
+    assert s["rho_sat"] < 1  # SPR concentrates load: some link saturates below rho=1
+
+
+def test_key_utilization(loaded_run) -> None:
+    cfg, result = loaded_run
+    s = summarize(result, cfg)
+    links = result.links
+    window_s = cfg.simulation.duration_s - cfg.simulation.warmup_s
+    # Produced key in the window is exactly rate * window length.
+    np.testing.assert_allclose(links["window_produced_bits"], links["rate_bps"] * window_s, rtol=1e-9)
+    assert s["key_utilization"] == pytest.approx(
+        links["window_consumed_bits"].sum() / (links["rate_bps"].sum() * window_s)
+    )
+    assert 0 < s["link_utilization_min"] <= s["link_utilization_median"] <= s["link_utilization_max"]
+    assert s["link_utilization_max"] <= 1.0 + cfg.links.pool_capacity_bits / (5000 * window_s)
+    assert 0 < s["key_utilization"] < 1
+
+
+def test_low_load_key_utilization_is_small() -> None:
+    cfg = make_cfg(traffic={"offered_load": 0.05})
+    s = summarize(run_simulation(cfg, 0), cfg)
+    # rho = consumed / generation capacity on SPR paths, so utilization ~= rho at low load.
+    assert s["key_utilization"] == pytest.approx(0.05, rel=0.25)
+
+
+# --------------------------------------------------------------------------- KAR
+
+
+def test_chain_spr_and_kar_identical_records() -> None:
+    # Overloaded with small pools, so requests wait, retry and time out (KAR reads every
+    # link's level on each retry; the chain leaves it only one path).
+    base = {"topology": {"type": "chain", "n_nodes": 8}, "links": {"pool_capacity_bits": 20000},
+            "traffic": {"offered_load": 1.5}, "relay": {"timeout_s": 2.0}}
+    spr_cfg = make_cfg(**base)
+    kar_cfg = make_cfg(**deep_merge(base, {"routing": {"strategy": "kar"}}))
+    spr, kar = run_simulation(spr_cfg, 4), run_simulation(kar_cfg, 4)
+    assert (spr.records["outcome"] == "outage").any()  # contention actually happened
+    pd.testing.assert_frame_equal(spr.records, kar.records)
+    pd.testing.assert_frame_equal(spr.timeseries, kar.timeseries)
+    s_spr, s_kar = summarize(spr, spr_cfg), summarize(kar, kar_cfg)
+    s_spr.pop("strategy"), s_kar.pop("strategy")
+    assert summaries_equal(s_spr, s_kar)
+
+
+def test_kar_low_load_default_mesh() -> None:
+    cfg = load_config(REPO_ROOT / "configs" / "default.yaml",
+                      overrides={"traffic": {"offered_load": 0.02}, "topology": {"seed": 0}})
+    kar_cfg = load_config(REPO_ROOT / "configs" / "default.yaml",
+                          overrides={"traffic": {"offered_load": 0.02}, "topology": {"seed": 0},
+                                     "routing": {"strategy": "kar"}})
+    spr = summarize(run_simulation(cfg, 0), cfg)
+    kar = summarize(run_simulation(kar_cfg, 0), kar_cfg)
+    assert kar["offered"] > 1000
+    assert kar["outage_probability"] <= 0.001
+    assert kar["mean_hops"] == pytest.approx(spr["mean_hops"], rel=0.05)
 
 
 def test_secoqc_per_link_runs() -> None:
@@ -198,6 +290,7 @@ def test_cli_prints_summary(capsys) -> None:
                "--set", "topology.n_nodes=10", "--set", "traffic.offered_load=0.2", "--by-hops"])
     out = capsys.readouterr().out
     assert rc == 0
-    for text in ("rho=0.2", "lambda=", "outage_probability", "delivered_throughput_bps",
-                 "latency_p95_s", "by hop count", "wall-clock"):
+    for text in ("rho=0.2", "lambda=", "rho_bn=", "rho_sat=", "topology seed=", "outage_probability",
+                 "delivered_throughput_bps", "latency_p95_s", "key_utilization",
+                 "link_utilization_median", "by hop count", "wall-clock"):
         assert text in out

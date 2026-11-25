@@ -83,6 +83,9 @@ class KeyLink:
         self._generated_to_anchor_bits = 0.0
         self._discarded_to_anchor_bits = 0.0
         self.total_consumed_bits = 0.0
+        # Number of consume() calls: the pool state changes only on consume, so observers
+        # (KAR's path cache) can use it as a state version.
+        self.consume_count = 0
 
     def _pool_at(self, now: float) -> float:
         """Pool level at `now`. Does not change the pool state (only the access clock)."""
@@ -110,6 +113,16 @@ class KeyLink:
         """Bits in the pool at time `now` (lazy refill, A1)."""
         return self._pool_at(now)
 
+    def peek(self, now: float) -> float:
+        """Pool level at `now` without touching ANY state (not even the access clock).
+
+        For observers such as routers. Undefined (raises) for times before the anchor.
+        """
+        if now < self._anchor_s:
+            raise ValueError(f"cannot peek before the last consume: now={now} < {self._anchor_s}")
+        pool_bits = self._anchor_bits + self.rate_bps * (now - self._anchor_s)
+        return pool_bits if pool_bits < self.capacity_bits else self.capacity_bits
+
     def consume(self, now: float, bits: float) -> None:
         """Remove `bits` from the pool. Raises InsufficientKeyError if the pool is short
         (by more than the EPS_BITS rounding slack)."""
@@ -125,6 +138,7 @@ class KeyLink:
         self._anchor_s = now
         self._anchor_bits = pool_bits + rounding_credit_bits - bits  # >= 0
         self.total_consumed_bits += bits
+        self.consume_count += 1
 
     def time_until(self, now: float, bits: float) -> float:
         """Seconds from `now` until the pool holds >= `bits`, ignoring other consumers.

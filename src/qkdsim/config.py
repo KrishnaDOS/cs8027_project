@@ -95,6 +95,10 @@ class ChainTopologyConfig:
 @dataclass
 class TopologyConfig:
     type: str = "random_mesh"
+    # If set, the topology RNG stream comes from this seed, so the topology stays fixed
+    # across run seeds and the run seed drives traffic only. If None, both streams are
+    # derived from the run seed.
+    seed: int | None = None
     n_nodes: int = 30
     # random_mesh parameters
     area_km: float = 50.0
@@ -170,6 +174,8 @@ class Config:
         _check_positive("routing.kar_epsilon_bits", self.routing.kar_epsilon_bits)
 
         topo = self.topology
+        if topo.seed is not None and (not isinstance(topo.seed, int) or topo.seed < 0):
+            raise ConfigError(f"topology.seed must be null or a non-negative integer; got {topo.seed!r}")
         if topo.n_nodes < 2:
             raise ConfigError("topology.n_nodes must be >= 2")
         _check_positive("topology.area_km", topo.area_km)

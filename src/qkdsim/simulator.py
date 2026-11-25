@@ -28,7 +28,13 @@ from qkdsim.config import Config, ConfigError
 from qkdsim.links import KeyLink, attach_links
 from qkdsim.routing import Router, make_router
 from qkdsim.topologies import build_topology
-from qkdsim.traffic import PairSampler, make_rng_streams, next_interarrival_s, resolve_arrival_rate
+from qkdsim.traffic import (
+    LoadInfo,
+    PairSampler,
+    next_interarrival_s,
+    resolve_arrival_rate,
+    run_rng_streams,
+)
 
 log = logging.getLogger(__name__)
 
@@ -46,15 +52,34 @@ class SimulationResult:
 
     records: pd.DataFrame
     timeseries: pd.DataFrame
-    links: pd.DataFrame
-    seed: int
-    lambda_per_s: float
-    offered_load: float
-    mean_spr_hops: float
+    links: pd.DataFrame  # per-link counters: whole run, plus the [warmup_s, duration_s) window
+    seed: int  # run seed (drives traffic; also the topology unless topology.seed is set)
+    topology_seed: int  # seed the topology RNG stream was derived from
+    load: LoadInfo
     total_rate_bps: float
     end_time_s: float
     n_spawned: int
     info: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def lambda_per_s(self) -> float:
+        return self.load.lambda_per_s
+
+    @property
+    def offered_load(self) -> float:
+        return self.load.offered_load
+
+    @property
+    def mean_spr_hops(self) -> float:
+        return self.load.mean_spr_hops
+
+    @property
+    def rho_bn(self) -> float:
+        return self.load.rho_bn
+
+    @property
+    def rho_sat(self) -> float:
+        return self.load.rho_sat
 
 
 def validate_for_run(cfg: Config) -> None:
@@ -88,6 +113,7 @@ class _Engine:
         self._path_links: dict[tuple, tuple[list[KeyLink], float]] = {}
         self.records: list[dict[str, Any]] = []
         self.samples: list[dict[str, float]] = []
+        self.window_counters: dict[str, list[tuple[float, float]]] = {}
         self.n_spawned = 0
 
     # ----------------------------------------------------------------- helpers
@@ -188,11 +214,27 @@ class _Engine:
             })
             yield self.env.timeout(sim.sample_interval_s)
 
+    def window_snapshots(self):
+        """Per-link (consumed, produced) counters at warmup_s and duration_s, so key
+        utilization can be measured over the same window as the request metrics.
+        produced = generated + discarded = all key the link made (rate * time)."""
+        sim = self.cfg.simulation
+        for label, at_s in (("start", sim.warmup_s), ("end", sim.duration_s)):
+            yield self.env.timeout(at_s - self.env.now)
+            now = self.env.now
+            counters = []
+            for link in self.links:
+                link.available(now)  # advance the access clock so the counters are current
+                counters.append((link.total_consumed_bits,
+                                 link.total_generated_bits + link.total_discarded_bits))
+            self.window_counters[label] = counters
+
     # ----------------------------------------------------------------- run
 
     def run(self) -> float:
         self.env.process(self.arrivals())
         self.env.process(self.sampler())
+        self.env.process(self.window_snapshots())
         self.env.run()  # no `until`: runs until every process (incl. in-flight requests) ends
         if len(self.records) != self.n_spawned:
             raise RuntimeError(
@@ -201,15 +243,26 @@ class _Engine:
         return self.env.now
 
     def links_snapshot(self, end_time_s: float) -> pd.DataFrame:
+        """Whole-run counters per link, plus window_* counters over [warmup_s, duration_s).
+
+        window_utilization = key consumed / key produced in the window. It can slightly
+        exceed 1 on a link that spends key stocked before warmup_s.
+        """
         rows = []
-        for u, v, link in self.G.edges(data="link"):
+        start, end = self.window_counters["start"], self.window_counters["end"]
+        for i, (u, v, link) in enumerate(self.G.edges(data="link")):
             pool_bits = link.available(end_time_s)
+            consumed_w = end[i][0] - start[i][0]
+            produced_w = end[i][1] - start[i][1]
             rows.append({
                 "u": u, "v": v, "length_km": link.length_km, "rate_bps": link.rate_bps,
                 "capacity_bits": link.capacity_bits, "initial_bits": link.initial_bits,
                 "final_bits": pool_bits, "generated_bits": link.total_generated_bits,
                 "consumed_bits": link.total_consumed_bits,
                 "discarded_bits": link.total_discarded_bits,
+                "window_consumed_bits": consumed_w,
+                "window_produced_bits": produced_w,
+                "window_utilization": consumed_w / produced_w if produced_w > 0 else float("nan"),
             })
         return pd.DataFrame(rows)
 
@@ -218,14 +271,15 @@ def run_simulation(cfg: Config, seed: int) -> SimulationResult:
     """Run one simulation of `cfg` with `seed`. Deterministic for a given (cfg, seed)."""
     cfg.validate()
     validate_for_run(cfg)
-    topology_rng, traffic_rng = make_rng_streams(seed)
+    topology_rng, traffic_rng, topology_seed = run_rng_streams(seed, cfg.topology.seed)
     G = build_network(cfg, topology_rng)
-    lambda_per_s, rho, hops = resolve_arrival_rate(G, cfg.traffic)
-    log.info("seed=%d topology=%s nodes=%d links=%d E[h_spr]=%.3f rho=%.3f lambda=%.3f/s",
-             seed, cfg.topology.type, G.number_of_nodes(), G.number_of_edges(), hops, rho,
-             lambda_per_s)
+    load = resolve_arrival_rate(G, cfg.traffic)
+    log.info("seed=%d topology_seed=%d topology=%s nodes=%d links=%d E[h_spr]=%.3f rho=%.3f "
+             "lambda=%.3f/s rho_bn=%.3f rho_sat=%.3f", seed, topology_seed, cfg.topology.type,
+             G.number_of_nodes(), G.number_of_edges(), load.mean_spr_hops, load.offered_load,
+             load.lambda_per_s, load.rho_bn, load.rho_sat)
 
-    engine = _Engine(cfg, G, make_router(cfg.routing), traffic_rng, lambda_per_s)
+    engine = _Engine(cfg, G, make_router(cfg.routing), traffic_rng, load.lambda_per_s)
     end_time_s = engine.run()
 
     records = pd.DataFrame(engine.records, columns=RECORD_COLUMNS)
@@ -236,9 +290,8 @@ def run_simulation(cfg: Config, seed: int) -> SimulationResult:
                                 columns=["time_s", "mean_fill_fraction", "frac_links_below_k"]),
         links=engine.links_snapshot(end_time_s),
         seed=seed,
-        lambda_per_s=lambda_per_s,
-        offered_load=rho,
-        mean_spr_hops=hops,
+        topology_seed=topology_seed,
+        load=load,
         total_rate_bps=float(sum(link.rate_bps for link in engine.links)),
         end_time_s=end_time_s,
         n_spawned=engine.n_spawned,
@@ -247,5 +300,7 @@ def run_simulation(cfg: Config, seed: int) -> SimulationResult:
             "n_links": G.number_of_edges(),
             "avg_degree": 2 * G.number_of_edges() / G.number_of_nodes(),
             "repair_edges": G.graph.get("repair_edges", 0),
+            "bottleneck_edge": load.bottleneck_edge,
+            "bottleneck_share": load.bottleneck_share,
         },
     )

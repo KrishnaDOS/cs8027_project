@@ -15,6 +15,9 @@ from qkdsim.traffic import (
     mean_spr_hops,
     next_interarrival_s,
     resolve_arrival_rate,
+    run_rng_streams,
+    spr_edge_shares,
+    traffic_pairs,
 )
 
 
@@ -26,6 +29,22 @@ def test_rng_streams_deterministic_and_independent() -> None:
     topo, traffic = make_rng_streams(7)
     assert topo.random() != traffic.random()
     assert make_rng_streams(8)[1].random() != make_rng_streams(7)[1].random()
+
+
+def test_run_rng_streams_topology_seed() -> None:
+    # Unset: topology stream follows the run seed.
+    t5, r5, used5 = run_rng_streams(5, None)
+    assert used5 == 5
+    # Fixed topology seed: same topology stream for every run seed; traffic still varies.
+    ta, ra, used_a = run_rng_streams(1, 0)
+    tb, rb, used_b = run_rng_streams(2, 0)
+    assert used_a == used_b == 0
+    assert ta.random() == tb.random()
+    assert ra.random() != rb.random()
+    # topology.seed=s reproduces the topology that run seed s draws when unset.
+    assert run_rng_streams(9, 5)[0].random() == run_rng_streams(5, None)[0].random()
+    # The traffic stream depends only on the run seed.
+    assert run_rng_streams(5, 0)[1].random() == run_rng_streams(5, None)[1].random()
 
 
 def test_mean_spr_hops_chain() -> None:
@@ -42,18 +61,58 @@ def test_mean_spr_hops_rejects_disconnected() -> None:
 
 def test_lambda_from_rho() -> None:
     G = attach_links(make_chain(4, 10.0), LinksConfig())  # 3 links x 5000 bps
-    lam, rho, hops = resolve_arrival_rate(G, TrafficConfig(key_size_bits=256, offered_load=0.5))
-    assert rho == 0.5
-    assert hops == pytest.approx(10 / 6)
-    assert lam == pytest.approx(0.5 * 15000 / (256 * 10 / 6))
+    load = resolve_arrival_rate(G, TrafficConfig(key_size_bits=256, offered_load=0.5))
+    assert load.offered_load == 0.5
+    assert load.mean_spr_hops == pytest.approx(10 / 6)
+    assert load.lambda_per_s == pytest.approx(0.5 * 15000 / (256 * 10 / 6))
 
 
 def test_rho_from_lambda() -> None:
     G = attach_links(make_chain(4, 10.0), LinksConfig())
     cfg = TrafficConfig(key_size_bits=256, offered_load=None, arrival_rate_per_s=10.0)
-    lam, rho, _ = resolve_arrival_rate(G, cfg)
-    assert lam == 10.0
-    assert rho == pytest.approx(10.0 * 256 * (10 / 6) / 15000)
+    load = resolve_arrival_rate(G, cfg)
+    assert load.lambda_per_s == 10.0
+    assert load.offered_load == pytest.approx(10.0 * 256 * (10 / 6) / 15000)
+
+
+def test_bottleneck_diagnostic_on_chain() -> None:
+    # Chain 0-1-2-3: the middle edge (1,2) is used by 8 of the 12 ordered pairs; the outer
+    # edges by 6. So b_max = 8/12 and rho_bn = lambda*K*(2/3)/R.
+    G = attach_links(make_chain(4, 10.0), LinksConfig())
+    load = resolve_arrival_rate(G, TrafficConfig(key_size_bits=256, offered_load=0.5))
+    assert load.bottleneck_edge == (1, 2)
+    assert load.bottleneck_share == pytest.approx(8 / 12)
+    assert load.rho_bn == pytest.approx(load.lambda_per_s * 256 * (8 / 12) / 5000)
+    assert load.rho_sat == pytest.approx(load.offered_load / load.rho_bn)
+    # rho_bn scales with lambda; rho_sat does not depend on the load at all.
+    load2 = resolve_arrival_rate(G, TrafficConfig(key_size_bits=256, offered_load=1.0))
+    assert load2.rho_bn == pytest.approx(2 * load.rho_bn)
+    assert load2.rho_sat == pytest.approx(load.rho_sat)
+
+
+def test_spr_edge_shares_sum_to_mean_hops() -> None:
+    G = attach_links(make_chain(5, 10.0), LinksConfig())
+    pairs = traffic_pairs(G, TrafficConfig())
+    shares = spr_edge_shares(G, pairs)
+    assert sum(shares.values()) == pytest.approx(mean_spr_hops(G))
+
+
+def test_fixed_pair_rho_normalized_by_path_bottleneck() -> None:
+    # Distance model on a chain with uneven spacing: rates differ per link.
+    from qkdsim.config import DistanceRateConfig
+    G = make_chain(4, 25.0)
+    G.edges[1, 2]["length_km"] = 75.0  # 10 dB more loss -> 500 bps on the middle link
+    G = attach_links(G, LinksConfig(rate_model="distance", distance=DistanceRateConfig()))
+    cfg = TrafficConfig(pair_mode="fixed", fixed_pair=[0, 3], key_size_bits=256, offered_load=1.0)
+    load = resolve_arrival_rate(G, cfg)
+    assert load.lambda_per_s == pytest.approx(500 / 256)  # bottleneck rate / K
+    assert load.mean_spr_hops == 3
+    assert load.rho_bn == pytest.approx(1.0)  # rho = 1 saturates the bottleneck exactly
+    assert load.rho_sat == pytest.approx(1.0)
+    assert load.bottleneck_edge == (1, 2)
+    # A pair that avoids the slow link is normalized by its own (faster) bottleneck.
+    cfg01 = TrafficConfig(pair_mode="fixed", fixed_pair=[0, 1], key_size_bits=256, offered_load=1.0)
+    assert resolve_arrival_rate(G, cfg01).lambda_per_s == pytest.approx(5000 / 256)
 
 
 def test_uniform_pairs_distinct_and_cover_all_ordered_pairs() -> None:

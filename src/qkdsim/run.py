@@ -72,9 +72,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"qkdsim run: {args.config}  seed={seed}  topology={cfg.topology.type}  "
           f"router={cfg.routing.strategy}  rate_model={cfg.links.rate_model}")
+    topo_note = "fixed" if cfg.topology.seed is not None else "from run seed"
+    print(f"topology seed={result.topology_seed} ({topo_note})")
     print(f"load: rho={result.offered_load:.4g}  lambda={result.lambda_per_s:.4g} req/s  "
           f"(E[h_spr]={result.mean_spr_hops:.4g}, sum R={result.total_rate_bps:.6g} bps, "
           f"K={cfg.traffic.key_size_bits} bits)")
+    print(f"SPR bottleneck: rho_bn={result.rho_bn:.4g}  rho_sat={result.rho_sat:.4g}  "
+          f"(edge {result.info['bottleneck_edge']}, used by "
+          f"{result.info['bottleneck_share']:.1%} of pairs)")
     print(format_summary(summary))
     if args.by_hops:
         with pd.option_context("display.width", 120, "display.max_rows", 200):
