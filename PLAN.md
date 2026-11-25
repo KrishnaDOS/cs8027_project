@@ -33,7 +33,7 @@ qkd-trusted-node-sim/
   README.md
   requirements.txt
   configs/default.yaml
-  data/secoqc.yaml              # SECOQC topology data (see TODO in topologies section)
+  data/secoqc.yaml              # SECOQC topology data (real data, see Addendum A.3) (updated per Addendum A)
   src/qkdsim/
     __init__.py
     config.py                   # dataclasses + YAML loading/merging
@@ -57,9 +57,9 @@ qkd-trusted-node-sim/
 ## configs/default.yaml (defaults; all values configurable)
 simulation: {duration_s: 600, warmup_s: 60, seeds: [0, 1, 2, 3, 4], sample_interval_s: 1.0}
 links:
-  rate_model: fixed            # fixed | distance   (fixed is PRIMARY for the presentation)
+  rate_model: fixed            # fixed | distance | per_link   (fixed is PRIMARY for the presentation) (updated per Addendum A)
   fixed_rate_bps: 5000         # within the 1-10 kbps baseline from the proposal
-  distance: {ref_rate_bps: 5000, ref_length_km: 50, attenuation_db_per_km: 0.2}
+  distance: {ref_rate_bps: 5000, ref_length_km: 25, attenuation_db_per_km: 0.2}   # (updated per Addendum A)
   #   R(L) = ref_rate_bps * 10^(-alpha * (L - ref_length_km) / 10)
   #   Simplification: real secret-key-rate curves fall faster near maximum range; note in README.
   pool_capacity_bits: 200000
@@ -87,13 +87,11 @@ links.py
 - KeyLink objects are stored on the nx.Graph as edge attribute "link".
 
 topologies.py (each builder returns an nx.Graph with edge attr "length_km" and optional node attr "pos" in km)
-- make_chain(n_nodes=32, spacing_km=65)
+- make_chain(n_nodes=32, spacing_km=63.8)   (updated per Addendum A)
   # Beijing-Shanghai-like line: 32 trusted relay nodes, ~2000 km
 - make_secoqc()
-  # 6 nodes, 8 links, loaded from data/secoqc.yaml.
-  # TODO: node names and link lengths must come from Peev et al. 2009 (ref [4]).
-  # Do NOT invent values. Ship placeholder lengths clearly marked PLACEHOLDER and
-  # print a warning when they are used.
+  # 6 nodes, 8 links.
+  # Loaded read-only from data/secoqc.yaml (real data, see Addendum A.3). (updated per Addendum A)
 - make_random_mesh(n_nodes, area_km, target_avg_degree, rng)
   # Random geometric graph; radius chosen to hit the target average degree;
   # edge length = Euclidean distance between node positions.

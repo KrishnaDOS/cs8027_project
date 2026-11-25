@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qkdsim"
+version = "0.1.0"
+description = "Network-layer simulator for trusted-node QKD networks (CS 8027 baseline)"
+requires-python = ">=3.11"
+# Runtime dependencies are pinned in requirements.txt.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,47 @@
+# Default parameters for the trusted-node QKD network simulator.
+# Every value here mirrors the dataclass defaults in src/qkdsim/config.py.
+# Experiment configs override individual keys; anything they omit falls back to these.
+
+simulation:
+  duration_s: 600
+  warmup_s: 60
+  seeds: [0, 1, 2, 3, 4]
+  sample_interval_s: 1.0
+
+links:
+  rate_model: fixed            # fixed | distance | per_link   (fixed is PRIMARY for the presentation)
+                               #   per_link: read skr_bps from the topology data file (SECOQC)
+  fixed_rate_bps: 5000         # within the 1-10 kbps baseline from the proposal
+  distance:
+    ref_rate_bps: 5000
+    ref_length_km: 25          # Peev 2009 Sec. 3.2: 5.7 kbit/s over 25 km (Addendum A.1)
+    attenuation_db_per_km: 0.2
+  #   R(L) = ref_rate_bps * 10^(-alpha * (L - ref_length_km) / 10)
+  #   Simplification: real secret-key-rate curves fall faster near maximum range; note in README.
+  pool_capacity_bits: 200000
+  initial_fill_fraction: 0.5
+
+traffic:
+  key_size_bits: 256
+  pair_mode: uniform           # uniform | fixed   (fixed requires fixed_pair: [src, dst])
+  # Specify EITHER arrival_rate_per_s OR offered_load (rho); set the other to null. If rho is given:
+  #   lambda = rho * sum(R_link) / (K * E[h_spr])
+  #   where E[h_spr] is the mean SPR hop count over all ordered node pairs.
+  offered_load: 0.5
+
+relay:
+  timeout_s: 5.0
+  per_hop_processing_s: 0.001
+  propagation_s_per_km: 5.0e-6
+  min_retry_interval_s: 0.001
+
+routing:
+  strategy: spr                # spr | kar
+  kar_epsilon_bits: 1.0
+
+topology:
+  type: random_mesh            # chain | secoqc | random_mesh
+  n_nodes: 30
+  area_km: 50
+  target_avg_degree: 4
+  # chain.spacing_km defaults to 63.8 (Chen 2021 Table 1; Addendum A.1); set it here only to override.
