@@ -2,12 +2,20 @@
 
 Assumption A1: each link holds a key pool (bits) that refills continuously at rate_bps up
 to capacity_bits. Refill is computed lazily when the link is accessed:
-    pool = min(capacity, pool + rate * (now - last_update))
+    pool(now) = min(capacity, anchor_bits + rate * (now - anchor_s))
 There are no per-bit events.
 
-All comparisons are exact (no epsilon). Because time_until() is computed in floating
-point, waiting exactly time_until() seconds can leave the pool a rounding error short;
-the simulator's retry loop (min_retry_interval_s) absorbs this.
+Reads are side-effect free: only consume() moves the anchor. So the pool level at any
+time depends only on the consume history, not on who looked at the link and when (the
+sampler, a failed availability check, or a key-aware router). Otherwise each read would
+re-round the float state, and runs that differ only in their reads (e.g. SPR vs KAR on a
+chain) would drift apart by ulps and break ties differently.
+
+Rounding slack: waiting exactly time_until() seconds can leave the computed pool a
+float rounding error (~1e-11 bits) short of the target. A pool within EPS_BITS of the
+request counts as sufficient. consume() credits that shortfall as generated key (it is
+key the continuous-time model has produced), so the pool never goes negative and
+pool == initial + generated - consumed still holds.
 """
 
 from __future__ import annotations
@@ -19,6 +27,9 @@ from qkdsim.config import ConfigError, LinksConfig
 
 if TYPE_CHECKING:
     import networkx as nx
+
+
+EPS_BITS = 1e-6  # rounding slack for availability checks (see module docstring)
 
 
 class InsufficientKeyError(RuntimeError):
@@ -35,7 +46,9 @@ class KeyLink:
         total_consumed_bits: bits removed by consume().
         total_discarded_bits: key generated while the pool was full (lost). Every
             generated bit is either kept or discarded, so
-            total_generated_bits + total_discarded_bits == rate_bps * elapsed time.
+            total_generated_bits + total_discarded_bits == rate_bps * elapsed time
+            (up to the EPS_BITS rounding credits described in the module docstring).
+    Generated/discarded are reported up to the latest time the link was accessed.
     """
 
     def __init__(
@@ -62,51 +75,68 @@ class KeyLink:
         self.initial_bits = float(initial_bits)
         self.length_km = float(length_km)
 
-        self._pool_bits = float(initial_bits)
-        self._last_update_s = float(start_time_s)
-        self.total_generated_bits = 0.0
+        # Pool state: the level was anchor_bits at anchor_s; only consume() moves the anchor.
+        self._anchor_s = float(start_time_s)
+        self._anchor_bits = float(initial_bits)
+        self._last_seen_s = float(start_time_s)  # latest access time (monotonicity check)
+        # Generated/discarded bits committed up to the anchor.
+        self._generated_to_anchor_bits = 0.0
+        self._discarded_to_anchor_bits = 0.0
         self.total_consumed_bits = 0.0
-        self.total_discarded_bits = 0.0
 
-    def _refill(self, now: float) -> None:
-        if now < self._last_update_s:
-            raise ValueError(
-                f"time went backwards: now={now} < last_update={self._last_update_s}"
-            )
-        produced_bits = self.rate_bps * (now - self._last_update_s)
-        added_bits = min(self.capacity_bits - self._pool_bits, produced_bits)
-        self._pool_bits += added_bits
-        self.total_generated_bits += added_bits
-        self.total_discarded_bits += produced_bits - added_bits
-        self._last_update_s = now
+    def _pool_at(self, now: float) -> float:
+        """Pool level at `now`. Does not change the pool state (only the access clock)."""
+        if now < self._last_seen_s:
+            raise ValueError(f"time went backwards: now={now} < last access={self._last_seen_s}")
+        self._last_seen_s = now
+        pool_bits = self._anchor_bits + self.rate_bps * (now - self._anchor_s)
+        return pool_bits if pool_bits < self.capacity_bits else self.capacity_bits
+
+    def _since_anchor(self, t: float) -> tuple[float, float]:
+        """(kept_bits, discarded_bits) produced between the anchor and time t."""
+        produced_bits = self.rate_bps * (t - self._anchor_s)
+        kept_bits = min(self.capacity_bits - self._anchor_bits, produced_bits)
+        return kept_bits, produced_bits - kept_bits
+
+    @property
+    def total_generated_bits(self) -> float:
+        return self._generated_to_anchor_bits + self._since_anchor(self._last_seen_s)[0]
+
+    @property
+    def total_discarded_bits(self) -> float:
+        return self._discarded_to_anchor_bits + self._since_anchor(self._last_seen_s)[1]
 
     def available(self, now: float) -> float:
-        """Bits in the pool at time `now` (after lazy refill)."""
-        self._refill(now)
-        return self._pool_bits
+        """Bits in the pool at time `now` (lazy refill, A1)."""
+        return self._pool_at(now)
 
     def consume(self, now: float, bits: float) -> None:
-        """Remove `bits` from the pool. Raises InsufficientKeyError if the pool is short."""
+        """Remove `bits` from the pool. Raises InsufficientKeyError if the pool is short
+        (by more than the EPS_BITS rounding slack)."""
         if bits < 0:
             raise ValueError(f"bits must be >= 0; got {bits}")
-        self._refill(now)
-        if bits > self._pool_bits:
-            raise InsufficientKeyError(
-                f"need {bits} bits, pool holds {self._pool_bits} at t={now}"
-            )
-        self._pool_bits -= bits
+        pool_bits = self._pool_at(now)
+        if pool_bits < bits - EPS_BITS:
+            raise InsufficientKeyError(f"need {bits} bits, pool holds {pool_bits} at t={now}")
+        kept_bits, discarded_bits = self._since_anchor(now)
+        rounding_credit_bits = bits - pool_bits if pool_bits < bits else 0.0
+        self._generated_to_anchor_bits += kept_bits + rounding_credit_bits
+        self._discarded_to_anchor_bits += discarded_bits
+        self._anchor_s = now
+        self._anchor_bits = pool_bits + rounding_credit_bits - bits  # >= 0
         self.total_consumed_bits += bits
 
     def time_until(self, now: float, bits: float) -> float:
         """Seconds from `now` until the pool holds >= `bits`, ignoring other consumers.
 
-        Returns 0 if already available and inf if `bits` exceeds capacity (or the rate is 0).
+        Returns 0 if already available (within EPS_BITS) and inf if `bits` exceeds
+        capacity (or the rate is 0). time_until(now, b) == 0 exactly when consume(now, b)
+        would succeed.
         """
         if bits > self.capacity_bits:
             return math.inf
-        self._refill(now)
-        deficit_bits = bits - self._pool_bits
-        if deficit_bits <= 0:
+        deficit_bits = bits - self._pool_at(now)
+        if deficit_bits <= EPS_BITS:
             return 0.0
         if self.rate_bps == 0:
             return math.inf
@@ -115,8 +145,8 @@ class KeyLink:
     def __repr__(self) -> str:
         return (
             f"KeyLink(rate_bps={self.rate_bps}, capacity_bits={self.capacity_bits}, "
-            f"pool_bits={self._pool_bits}, length_km={self.length_km}, "
-            f"last_update_s={self._last_update_s})"
+            f"anchor_bits={self._anchor_bits} at t={self._anchor_s}, "
+            f"length_km={self.length_km})"
         )
 
 

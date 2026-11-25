@@ -16,7 +16,7 @@ import networkx as nx
 import numpy as np
 import yaml
 
-from qkdsim.config import ChainTopologyConfig
+from qkdsim.config import ChainTopologyConfig, ConfigError, TopologyConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SECOQC_PATH = REPO_ROOT / "data" / "secoqc.yaml"
@@ -175,3 +175,21 @@ def make_random_mesh(
 
     G.graph["repair_edges"] = repair_edges
     return G
+
+
+# --------------------------------------------------------------------------- dispatch
+
+
+def build_topology(cfg: TopologyConfig, rng: np.random.Generator) -> nx.Graph:
+    """Build the topology named by cfg.type (links are NOT attached here).
+
+    chain uses cfg.n_nodes and cfg.chain.spacing_km; secoqc ignores n_nodes (always 6);
+    random_mesh uses n_nodes, area_km, target_avg_degree and the topology RNG stream.
+    """
+    if cfg.type == "chain":
+        return make_chain(cfg.n_nodes, cfg.chain.spacing_km)
+    if cfg.type == "secoqc":
+        return make_secoqc()
+    if cfg.type == "random_mesh":
+        return make_random_mesh(cfg.n_nodes, cfg.area_km, cfg.target_avg_degree, rng)
+    raise ConfigError(f"unknown topology.type {cfg.type!r}")

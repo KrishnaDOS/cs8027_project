@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pytest
 
 from qkdsim.config import ConfigError, DistanceRateConfig, LinksConfig
@@ -137,6 +138,40 @@ def test_no_discard_below_capacity() -> None:
     link = make_link()
     link.available(5.0)  # pool 700 < 1000
     assert link.total_discarded_bits == 0.0
+
+
+# --------------------------------------------------------------------------- read independence
+
+
+def test_reads_do_not_change_pool_state() -> None:
+    # Same consume history, different read histories -> bit-identical pools.
+    quiet, busy = make_link(rate_bps=5000.0, capacity_bits=200_000.0, initial_bits=1.0), \
+        make_link(rate_bps=5000.0, capacity_bits=200_000.0, initial_bits=1.0)
+    t = 0.0
+    for step in range(1, 2000):
+        t = step * 0.0137
+        for frac in (0.1, 0.33, 0.71):
+            busy.available(t - 0.0137 * (1 - frac))
+            busy.time_until(t - 0.0137 * (1 - frac), 256)
+        if quiet.time_until(t, 256) == 0.0:
+            quiet.consume(t, 256)
+            busy.consume(t, 256)
+    assert busy.available(t) == quiet.available(t)  # exact, not approx
+    assert busy.total_generated_bits == quiet.total_generated_bits
+
+
+def test_waiting_time_until_always_suffices() -> None:
+    rng = np.random.default_rng(0)
+    link = make_link(rate_bps=5000.0, capacity_bits=200_000.0, initial_bits=0.0)
+    now = 0.0
+    for _ in range(5000):
+        bits = float(rng.integers(1, 512))
+        now += link.time_until(now, bits)
+        assert link.time_until(now, bits) == 0.0
+        link.consume(now, bits)  # must not raise despite float rounding
+        assert link.available(now) >= 0.0
+    pool = link.available(now)
+    assert pool == pytest.approx(link.initial_bits + link.total_generated_bits - link.total_consumed_bits, abs=1e-6)
 
 
 # --------------------------------------------------------------------------- link_rate
