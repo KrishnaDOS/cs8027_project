@@ -1,0 +1,32 @@
+# SECOQC Vienna QKD network prototype (deployed 2008)
+# Source: Peev et al., New J. Phys. 11, 075001 (2009)
+#   Topology and link lengths: Fig. 2. Link-to-system mapping: Fig. 2 + Fig. 4 wiring diagram.
+#   Secret key rates (SKR): Section 3, per system.
+# skr_status:
+#   measured          = number stated in the paper's text
+#   read_from_figure  = approximate value read from a plot
+#   assumed           = paper gives no rate for this link; SECOQC design criterion
+#                       (>= 1 kbit/s at 25 km, Sec. 3) is used instead
+name: secoqc_vienna
+nodes:
+  - {id: STP, name: "St. Poelten repeater station", peev_node: 1}
+  - {id: BRT, name: "Breitenfurterstrasse",         peev_node: 2}
+  - {id: SIE, name: "Siemensstrasse",               peev_node: 3}
+  - {id: ERD, name: "Erdberger Laende",             peev_node: 4}
+  - {id: GUD, name: "Gudrunstrasse",                peev_node: 5}
+  - {id: FRM, name: "Siemens Forum",                peev_node: 6}
+links:
+  - {u: STP, v: BRT, length_km: 85.0, system: COW,   skr_bps: 700,   skr_status: read_from_figure,
+     note: "Fig. 11 shows ~0.5-0.8 kbit/s over 10 h. Length given as 85 km (Fig. 2), 83 km (abstract), 82 km (Fig. 11 caption); Fig. 2 value used."}
+  - {u: BRT, v: SIE, length_km: 32.0, system: Toshiba, skr_bps: 3100, skr_status: measured,
+     note: "24 h average, QBER 2.6%, 7.5 dB loss (Sec. 3.2). Text says 33 km; Fig. 2 value used."}
+  - {u: SIE, v: ERD, length_km: 16.0, system: Entangled, skr_bps: 2500, skr_status: measured,
+     note: "QBER 3.5% (Sec. 3.4)."}
+  - {u: ERD, v: FRM, length_km: 0.08, system: FreeSpace, skr_bps: 15000, skr_status: read_from_figure,
+     note: "80 m free-space link. Text: up to 17 kbit/s; Fig. 16 shows ~15 kbit/s sustained."}
+  - {u: ERD, v: GUD, length_km: 6.0, system: CV, skr_bps: 8000, skr_status: measured,
+     note: "57 h average, peaks ~10 kbit/s (Sec. 3.5). Text says 6.2 km."}
+  - {u: ERD, v: BRT, length_km: 25.0, system: idQ-1, skr_bps: 1000, skr_status: measured,
+     note: "Mean rate stated as almost exactly 1 kbit/s, 5.75 dB loss (Sec. 3.1)."}
+  - {u: SIE, v: GUD, length_km: 22.0, system: idQ-2, skr_bps: 1000, skr_status: assumed}
+  - {u: BRT, v: GUD, length_km: 19.0, system: idQ-3, skr_bps: 1000, skr_status: assumed}
