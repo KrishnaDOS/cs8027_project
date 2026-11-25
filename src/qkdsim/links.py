@@ -33,6 +33,9 @@ class KeyLink:
             pool is full is discarded and not counted, so at any time
             pool == initial_bits + total_generated_bits - total_consumed_bits.
         total_consumed_bits: bits removed by consume().
+        total_discarded_bits: key generated while the pool was full (lost). Every
+            generated bit is either kept or discarded, so
+            total_generated_bits + total_discarded_bits == rate_bps * elapsed time.
     """
 
     def __init__(
@@ -63,18 +66,18 @@ class KeyLink:
         self._last_update_s = float(start_time_s)
         self.total_generated_bits = 0.0
         self.total_consumed_bits = 0.0
+        self.total_discarded_bits = 0.0
 
     def _refill(self, now: float) -> None:
         if now < self._last_update_s:
             raise ValueError(
                 f"time went backwards: now={now} < last_update={self._last_update_s}"
             )
-        added_bits = min(
-            self.capacity_bits - self._pool_bits,
-            self.rate_bps * (now - self._last_update_s),
-        )
+        produced_bits = self.rate_bps * (now - self._last_update_s)
+        added_bits = min(self.capacity_bits - self._pool_bits, produced_bits)
         self._pool_bits += added_bits
         self.total_generated_bits += added_bits
+        self.total_discarded_bits += produced_bits - added_bits
         self._last_update_s = now
 
     def available(self, now: float) -> float:

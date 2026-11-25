@@ -150,7 +150,8 @@ E2 mesh_load: random mesh n=30, area 50 km, avg degree ~4; SPR vs KAR;
 E3 mesh_density: fixed rho=0.6; n_nodes in {10, 20, 30, 40, 60} in a fixed 50 km area with a
    fixed connection radius, so average degree grows with n; SPR vs KAR.
    Plots: throughput vs n and outage vs n.
-(Later, not this phase: E4 SECOQC once the real data is filled in; E5 distance rate model.)
+E4 SECOQC: stretch item in M4 (real data available, see Addendum A.3). (updated per Addendum A)
+(Later, not this phase: E5 distance rate model.)
 
 Runner: experiments/run_experiment.py <config.yaml>
 - Expands the sweep grid x seeds and runs in parallel with
@@ -181,8 +182,8 @@ M3 KAR + distance rate model + routing tests + chain-equivalence test.
 M4 Experiment runner + E1-E3 configs; full sweeps run in parallel.
 M5 make_plots.py produces all E1-E3 figures; README documents how to reproduce,
    lists assumptions A1-A7, and the default parameters.
-Out of scope this phase: notebook/CLI demo, SECOQC real data, "optimal" and "maximum" tier
-features (widest-path routing, buffers, multipath, stale state, failures).
+Out of scope this phase: notebook/CLI demo, "optimal" and "maximum" tier
+features (widest-path routing, buffers, multipath, stale state, failures). (updated per Addendum A)
 
 ## Conventions
 - Type hints everywhere; dataclasses for config.
@@ -263,3 +264,8 @@ A.1 applies now; the rest applies at the milestone named.
 
 ### A.7 References not yet extracted (none block M0-M5)
 Chen 2021 npj (Hefei 46-node network), Sasaki 2011 (Tokyo), Raubitzek 2026 (Austria).
+
+## Addendum B — Mesh and E3 changes (from M1 review)
+- Random meshes are generated once and repaired to connectivity by adding the shortest inter-component edges (G.graph["repair_edges"] records how many). This avoids the selection bias of reject-and-redraw, where only ~10% of n=30, degree-4 draws are connected.
+- E3 is redesigned: fixed n_nodes=30, 50 km area, target_avg_degree in {3, 4, 6, 8}, SPR vs KAR, rho=0.6. Plots: outage and throughput vs achieved average degree. A node-count sweep at fixed degree is an optional extra.
+- KeyLink tracks total_discarded_bits (key lost to a full pool) for later utilization analysis.

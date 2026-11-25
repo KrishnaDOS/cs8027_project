@@ -21,8 +21,6 @@ from qkdsim.config import ChainTopologyConfig
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SECOQC_PATH = REPO_ROOT / "data" / "secoqc.yaml"
 
-MESH_MAX_TRIES = 100
-
 
 class AssumedRateWarning(UserWarning):
     """A topology data file contains links whose key rate is assumed, not sourced."""
@@ -143,30 +141,37 @@ def make_random_mesh(
     target_avg_degree: float,
     rng: np.random.Generator,
 ) -> nx.Graph:
-    """Random geometric graph: n_nodes uniform in an area_km x area_km square.
+    """Random geometric graph on n_nodes uniform in an area_km x area_km square, repaired
+    to connectivity (Addendum B).
 
-    Nodes within mesh_radius_km(...) of each other are linked; edge length is their
-    Euclidean distance. Disconnected draws are discarded and redrawn, up to 100 tries,
-    after which a RuntimeError is raised. Rejecting disconnected draws biases the
-    achieved degree slightly above the target (see tests/test_topologies.py).
+    One draw only: nodes within mesh_radius_km(...) of each other are linked. If that graph
+    is disconnected, the shortest Euclidean edge between two different components is
+    added, repeatedly, until it is connected. Each repair edge merges two components, so
+    G.graph["repair_edges"] == (initial number of components) - 1. Repair edges are longer
+    than the radius. Edge length is always the Euclidean distance between the endpoints.
+    Unlike reject-and-redraw, this does not bias the sample towards denser draws.
     """
     radius_km = mesh_radius_km(n_nodes, area_km, target_avg_degree)
-    for attempt in range(1, MESH_MAX_TRIES + 1):
-        pos_km = rng.uniform(0.0, area_km, size=(n_nodes, 2))
-        dist_km = np.sqrt(((pos_km[:, None, :] - pos_km[None, :, :]) ** 2).sum(axis=-1))
+    pos_km = rng.uniform(0.0, area_km, size=(n_nodes, 2))
+    dist_km = np.sqrt(((pos_km[:, None, :] - pos_km[None, :, :]) ** 2).sum(axis=-1))
 
-        G = nx.Graph(name="random_mesh", radius_km=radius_km, attempts=attempt)
-        for i in range(n_nodes):
-            G.add_node(i, pos=(float(pos_km[i, 0]), float(pos_km[i, 1])))
-        rows, cols = np.nonzero(np.triu(dist_km <= radius_km, k=1))
-        for i, j in zip(rows.tolist(), cols.tolist()):
-            G.add_edge(i, j, length_km=float(dist_km[i, j]))
+    G = nx.Graph(name="random_mesh", radius_km=radius_km)
+    for i in range(n_nodes):
+        G.add_node(i, pos=(float(pos_km[i, 0]), float(pos_km[i, 1])))
+    rows, cols = np.nonzero(np.triu(dist_km <= radius_km, k=1))
+    for i, j in zip(rows.tolist(), cols.tolist()):
+        G.add_edge(i, j, length_km=float(dist_km[i, j]))
 
-        if nx.is_connected(G):
-            return G
+    repair_edges = 0
+    while not nx.is_connected(G):
+        component = np.empty(n_nodes, dtype=int)
+        for label, nodes in enumerate(nx.connected_components(G)):
+            component[list(nodes)] = label
+        # Distances between nodes in different components only; argmin picks the shortest.
+        cross_km = np.where(component[:, None] != component[None, :], dist_km, np.inf)
+        i, j = np.unravel_index(np.argmin(cross_km), cross_km.shape)
+        G.add_edge(int(i), int(j), length_km=float(dist_km[i, j]))
+        repair_edges += 1
 
-    raise RuntimeError(
-        f"make_random_mesh: no connected graph in {MESH_MAX_TRIES} tries "
-        f"(n_nodes={n_nodes}, area_km={area_km}, target_avg_degree={target_avg_degree}, "
-        f"radius_km={radius_km:.2f}); increase target_avg_degree or n_nodes"
-    )
+    G.graph["repair_edges"] = repair_edges
+    return G

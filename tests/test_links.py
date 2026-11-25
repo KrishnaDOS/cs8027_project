@@ -113,6 +113,30 @@ def test_counters_and_conservation() -> None:
     pool = link.available(100.0)
     assert pool == pytest.approx(link.initial_bits + link.total_generated_bits - link.total_consumed_bits)
     assert link.total_consumed_bits <= link.initial_bits + link.total_generated_bits
+    assert link.total_discarded_bits == pytest.approx(100 * 100.0 - 1250.0)  # produced - kept
+
+
+def test_discarded_bits_account_for_all_key() -> None:
+    link = make_link()  # 100 bps, capacity 1000, initial 200, start t=0
+    link.available(20.0)  # fills at t=8; 1200 bits discarded
+    assert link.total_discarded_bits == pytest.approx(1200.0)
+    link.consume(20.0, 900.0)  # pool 100
+    link.available(25.0)  # +500, nothing discarded
+    link.consume(25.0, 600.0)  # pool 0
+    link.available(40.0)  # +1000 by t=35, then 500 discarded
+    link.available(40.0)  # repeated access at the same time changes nothing
+    elapsed_s = 40.0
+    assert link.total_discarded_bits == pytest.approx(1700.0)
+    assert (
+        link.initial_bits + link.total_generated_bits + link.total_discarded_bits
+        == pytest.approx(link.rate_bps * elapsed_s + link.initial_bits)
+    )
+
+
+def test_no_discard_below_capacity() -> None:
+    link = make_link()
+    link.available(5.0)  # pool 700 < 1000
+    assert link.total_discarded_bits == 0.0
 
 
 # --------------------------------------------------------------------------- link_rate

@@ -104,27 +104,74 @@ def test_secoqc_file_unchanged_by_loading() -> None:
 # --------------------------------------------------------------------------- random mesh
 
 
-def test_mesh_connected_lengths_and_positions() -> None:
+MESH_SEEDS = range(10)
+
+
+def test_mesh_lengths_and_positions() -> None:
     G = make_random_mesh(30, 50.0, 4.0, np.random.default_rng(0))
     assert G.number_of_nodes() == 30
-    assert nx.is_connected(G)
-    radius_km = G.graph["radius_km"]
     for u, v, length in G.edges(data="length_km"):
         (x1, y1), (x2, y2) = G.nodes[u]["pos"], G.nodes[v]["pos"]
         assert length == pytest.approx(np.hypot(x1 - x2, y1 - y2))
-        assert length <= radius_km
     for _, (x, y) in G.nodes(data="pos"):
         assert 0 <= x <= 50 and 0 <= y <= 50
 
 
-@pytest.mark.parametrize(("n_nodes", "target"), [(30, 4.0), (20, 4.0), (30, 6.0)])
-def test_mesh_average_degree_near_target(n_nodes: int, target: float) -> None:
-    seeds = range(10)
-    degrees = [
-        2 * make_random_mesh(n_nodes, 50.0, target, np.random.default_rng(s)).number_of_edges() / n_nodes
-        for s in seeds
-    ]
-    assert abs(np.mean(degrees) - target) <= 0.15 * target
+@pytest.mark.parametrize("target", [3.0, 4.0, 6.0, 8.0])
+def test_mesh_connected_and_degree_near_target(target: float) -> None:
+    n_nodes = 30
+    degrees, repairs = [], []
+    for seed in MESH_SEEDS:
+        G = make_random_mesh(n_nodes, 50.0, target, np.random.default_rng(seed))
+        assert nx.is_connected(G), f"seed {seed} not connected"
+        degrees.append(2 * G.number_of_edges() / n_nodes)
+        repairs.append(G.graph["repair_edges"])
+    mean_degree = float(np.mean(degrees))
+    print(
+        f"\n[mesh n={n_nodes} target={target}] achieved mean degree={mean_degree:.3f}, "
+        f"mean repair_edges={np.mean(repairs):.2f}"
+    )
+    assert abs(mean_degree - target) <= 0.15 * target
+
+
+@pytest.mark.parametrize("target", [1.0, 3.0, 4.0])
+def test_mesh_repair_edges_are_minimal_and_shortest(target: float) -> None:
+    for seed in MESH_SEEDS:
+        G = make_random_mesh(30, 50.0, target, np.random.default_rng(seed))
+        assert nx.is_connected(G)
+        radius_km = G.graph["radius_km"]
+        # Repair edges are exactly the edges longer than the radius (any closer pair
+        # was already linked), and each one merges two components of the raw draw.
+        raw = G.copy()
+        raw.remove_edges_from([(u, v) for u, v, L in G.edges(data="length_km") if L > radius_km])
+        n_repair = G.number_of_edges() - raw.number_of_edges()
+        assert n_repair == G.graph["repair_edges"]
+        assert n_repair == nx.number_connected_components(raw) - 1
+
+
+def test_mesh_repair_picks_shortest_cross_component_edge() -> None:
+    G = make_random_mesh(30, 50.0, 1.0, np.random.default_rng(3))  # sparse: many repairs
+    radius_km = G.graph["radius_km"]
+    raw = G.copy()
+    raw.remove_edges_from([(u, v) for u, v, L in G.edges(data="length_km") if L > radius_km])
+    repair = sorted((L, u, v) for u, v, L in G.edges(data="length_km") if L > radius_km)
+    assert repair, "expected at least one repair edge"
+    # The shortest repair edge must be the shortest edge between any two raw components.
+    pos = nx.get_node_attributes(G, "pos")
+    comp = {node: k for k, nodes in enumerate(nx.connected_components(raw)) for node in nodes}
+    best_km = min(
+        np.hypot(pos[a][0] - pos[b][0], pos[a][1] - pos[b][1])
+        for a in G
+        for b in G
+        if comp[a] != comp[b]
+    )
+    assert repair[0][0] == pytest.approx(best_km)
+
+
+def test_mesh_already_connected_needs_no_repair() -> None:
+    G = make_random_mesh(10, 50.0, 8.5, np.random.default_rng(0))  # near-complete graph
+    assert nx.is_connected(G)
+    assert G.graph["repair_edges"] == 0
 
 
 def test_mesh_is_deterministic_per_seed() -> None:
@@ -144,11 +191,6 @@ def test_mesh_radius_matches_expected_degree() -> None:
         dist = np.sqrt(((pos[:, None] - pos[None]) ** 2).sum(-1))
         degrees.append(((dist <= r).sum() - n) / n)
     assert np.mean(degrees) == pytest.approx(target, rel=0.03)
-
-
-def test_mesh_fails_loudly_when_never_connected() -> None:
-    with pytest.raises(RuntimeError, match="100 tries"):
-        make_random_mesh(60, 50.0, 1.0, np.random.default_rng(0))
 
 
 def test_mesh_rejects_unreachable_degree() -> None:
