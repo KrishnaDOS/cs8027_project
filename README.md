@@ -12,8 +12,14 @@ physical layer is only a key rate per link.
 
 ## Main results
 
-All numbers are means over 5 seeds with 95% t-intervals; full tables are in
-[figures/tables.md](figures/tables.md).
+All numbers are means over seeds with 95% t-intervals; full tables are in
+[figures/tables.md](figures/tables.md). The E1, E3 and E4 numbers below come from the
+M5 runs, before the Addendum E grids (E1 ρ ∈ {0.65, 0.8, 0.95}, 20 topologies per E3 degree,
+new E3b, E4 ρ ∈ {0.05 … 0.3}); re-run those experiments and regenerate the tables to update them.
+
+E2's confidence intervals reflect traffic randomness on one fixed topology per mesh only
+(the 5 seeds vary arrivals and node pairs, not the graph), so they are narrow and say
+nothing about other topologies; E3/E3b vary the topology and are the guide to that spread.
 
 - **Routing only helps where paths are diverse.** On the default 30-node mesh
   (`mesh0`, topology seed 0), SPR's busiest link is a *bridge* used by 43% of node pairs, so
@@ -23,7 +29,11 @@ All numbers are means over 5 seeds with 95% t-intervals; full tables are in
   ρ = 0.6 (0.315 → 0.149).
 - **KAR's gain grows with mesh density** (E3, ρ = 0.3): the relative outage reduction rises
   from 6% at degree 3.2 to 75% at degree 8.7, as the largest bridge share falls from 0.47 to
-  0.05. Spread across topologies is large (5 topologies per degree).
+  0.05. Spread across topologies is large (5 topologies per degree in this run). At fixed ρ
+  a denser mesh also receives a higher arrival rate (ρ normalizes by total link rate), so
+  E3b repeats the sweep at one fixed arrival rate ("same demand, more links"). The headline
+  figure `e3_gain_vs_bridge_share` plots each topology's KAR gain against its largest
+  bridge share, for E3 and E3b.
 - **SPR concentrates load**: links saturate far below ρ = 1. The load at which SPR's busiest
   link saturates (`rho_sat`) has a median of 0.18 (range 0.10–0.27) over 50 degree-4 meshes,
   and is 0.69 on the 32-node chain and 0.10 on SECOQC.
@@ -108,10 +118,14 @@ utilization.
 
 | Config | What it varies | Runs (full / quick) | Projected wall-clock, 13 workers (full / quick) |
 |---|---|---|---|
-| `e1_chain_hops.yaml` | chain (32 nodes), ρ ∈ {0.2, 0.5, 0.8}, SPR; one KAR sanity run | 16 / 10 | ≤ 0.2 / ≤ 0.1 min |
-| `e2_mesh_load.yaml` | two fixed meshes × ρ ∈ {0.05 … 1.0} (9 values) × SPR/KAR | 180 / 108 | ≤ 20 / ≤ 6.4 min |
-| `e3_mesh_density.yaml` | target degree ∈ {3, 4, 6, 8}, ρ = 0.3, 5 topologies, SPR/KAR | 40 / 24 | ≤ 1.1 / ≤ 0.3 min |
-| `e4_secoqc.yaml` | SECOQC with measured rates, ρ ∈ {0.3, 0.6, 0.9}, SPR/KAR | 30 / 18 | ≤ 0.1 / ≤ 0.1 min |
+| `e1_chain_hops.yaml` | chain (32 nodes), ρ ∈ {0.65, 0.8, 0.95} around ρ_sat ≈ 0.69, SPR; one KAR sanity run at ρ = 0.8 | 16 / 10 | not yet measured; ≈ 1 min or less (est.) |
+| `e2_mesh_load.yaml` | two fixed meshes × ρ ∈ {0.05 … 1.0} (9 values) × SPR/KAR | 180 / 108 | ≤ 20 / ≤ 6.4 min (measured) |
+| `e3_mesh_density.yaml` | target degree ∈ {3, 4, 6, 8}, ρ = 0.3, 20 topologies, SPR/KAR | 160 / 24 | ≈ ≤ 4 / ≤ 0.3 min (est. from the 40-run dry run) |
+| `e3b_mesh_density_fixed_lambda.yaml` | as E3, but λ = 95.1826 req/s fixed (E3's mean degree-4 λ) | 160 / 24 | ≈ ≤ 4 / ≤ 0.3 min (est.) |
+| `e4_secoqc.yaml` | SECOQC with measured rates, ρ ∈ {0.05, 0.1, 0.15, 0.3} around ρ_sat ≈ 0.10, SPR/KAR | 40 / 24 | ≤ 0.2 / ≤ 0.1 min (est.) |
+
+Estimates for the changed configs are scaled from earlier dry runs; run `--dry-run` for a
+measured projection.
 
 ```bash
 python experiments/run_experiment.py experiments/configs/e2_mesh_load.yaml --dry-run   # time + projection only
@@ -125,32 +139,43 @@ Options: `--workers N` (default: CPU count − 1), `--results-dir DIR`. Each run
 invalidate results**: delete the results folder after changing simulator code. Aggregates
 go to `summary.csv` (one row per run) and `by_hops.csv`; `meta.json` records the config
 hash, git commit (and whether the tree was dirty), start/end time and Python version.
-`--quick` writes to `results/<exp>_quick/`.
+`--quick` writes to `results/<exp>_quick/`. Aggregation includes only run files whose
+run id belongs to the current config's grid; others (e.g. from an earlier grid) are
+reported with a warning, skipped, and left on disk.
 
 SPR and KAR always run on identical seeds, so results can be paired. E2 fixes each mesh with
-`topology.seed` and varies only traffic seeds; E3 leaves `topology.seed` unset, so the run
-seed also picks the topology.
+`topology.seed` and varies only traffic seeds; E3 and E3b leave `topology.seed` unset, so the
+run seed also picks the topology, and seed s gives the same mesh in E3 and E3b.
+
+**E3 vs E3b.** ρ is normalized by total link rate, and denser meshes add mostly peripheral
+capacity, so at a fixed ρ they carry more traffic and are relatively more loaded at their
+bottleneck. E3b holds the arrival rate fixed instead, at λ = 95.1826 req/s, the mean λ of the
+E3 degree-4 runs at ρ = 0.3 (derivation in the config file), so sparser meshes see more load
+than in E3 and denser meshes less.
 
 ## Figures and tables
 
 ```bash
 python scripts/make_plots.py --all            # PNG (200 dpi) + PDF in figures/
 python scripts/make_plots.py --all --ieee     # 3.5 in single-column versions, *_ieee.*
-python scripts/make_plots.py --exp e2         # one experiment (e1..e4, topo)
+python scripts/make_plots.py --exp e2         # one experiment (e1, e2, e3, e3b, e4, topo)
 python scripts/make_tables.py                 # figures/tables.md
 ```
 
 Both read `results/<exp>/summary.csv` and `by_hops.csv` (`--results-dir` to point elsewhere).
 Error bars are mean ± 95% CI across seeds using Student's t (n = 5 is too small for 1.96).
-SPR is always blue with circles and KAR orange with squares.
+SPR is always blue with circles and KAR orange with squares. In E2 the intervals cover
+traffic randomness on a fixed topology only (see Main results).
 
 | Figure | Content |
 |---|---|
-| `e1_outage_vs_hops`, `e1_latency_vs_hops` | chain: outage and mean latency (delivered requests) vs hop count, one line per ρ |
+| `e3_gain_vs_bridge_share` | **headline:** KAR's relative outage reduction vs max bridge share, one dot per topology, colored by degree; E3 (left) and E3b (right) |
+| `e1_outage_vs_hops`, `e1_latency_vs_hops` | chain: outage and mean latency (delivered requests) vs hop count in ~6 bins (1–5, …, 26–31), one line per ρ |
 | `e2_outage_vs_rho`, `e2_throughput_vs_rho`, `e2_utilization_vs_rho` | both meshes side by side, `rho_sat` marked; throughput with the offered-load line |
 | `e2_latency_vs_rho` | p95 latency above outage (latency alone hides survivorship bias) |
 | `e2_paired_gain` | KAR − SPR outage, paired by seed, with 95% CI |
-| `e3_outage_vs_degree`, `e3_throughput_vs_degree`, `e3_kar_gain_vs_degree` | density sweep vs achieved mean degree |
+| `e3_outage_vs_degree`, `e3_throughput_vs_degree`, `e3_kar_gain_vs_degree` | density sweep vs achieved mean degree (fixed ρ) |
+| `e3b_outage_vs_degree`, `e3b_throughput_vs_degree`, `e3b_kar_gain_vs_degree` | the same at a fixed arrival rate (E3b) |
 | `e4_secoqc_bars` | SECOQC outage and throughput by ρ |
 | `topo_mesh0_vs_diverse` | both E2 meshes; edge width ∝ SPR pair share, bridges highlighted |
 
@@ -166,7 +191,7 @@ seed 8.
 degree-4 random geometric meshes usually contain bridges that carry a large share of
 traffic (in 33 of 50 seeds SPR's busiest link is itself a bridge). E2's `diverse` results
 show what KAR can do when path diversity exists, not what it does on a typical degree-4
-mesh. E3 samples topologies at random and is the better guide to typical behaviour.
+mesh. E3 and E3b sample topologies at random and are the better guide to typical behaviour.
 
 ## Known limitations
 
@@ -193,5 +218,5 @@ scripts/                       select_mesh.py, make_plots.py, make_tables.py
 results/                       run outputs (git-ignored)
 figures/                       figures and tables.md
 tests/                         pytest suite
-PLAN.md                        design plan and addenda A-D
+PLAN.md                        design plan and addenda A-E
 ```

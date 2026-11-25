@@ -1,13 +1,15 @@
 name: e3_mesh_density
 description: >
-  Mesh density (Addenda B/D): n=30 in a 50 km square, target degree {3, 4, 6, 8}, rho=0.3.
-  topology.seed is unset, so run seeds 0-4 are also the topology seeds: each degree is
-  sampled over 5 meshes, and SPR and KAR run on identical seeds (paired).
+  Mesh density (Addenda B/D/E): n=30 in a 50 km square, target degree {3, 4, 6, 8}, rho=0.3.
+  topology.seed is unset, so run seeds 0-19 are also the topology seeds: each degree is
+  sampled over 20 meshes, and SPR and KAR run on identical seeds (paired).
+  rho normalizes by total link rate, so denser meshes also get a higher arrival rate;
+  see e3b_mesh_density_fixed_lambda.yaml for the fixed-demand variant.
 base: ../../configs/default.yaml
 overrides:
   topology: {type: random_mesh, n_nodes: 30, area_km: 50, seed: null}
   traffic: {offered_load: 0.3}
-seeds: [0, 1, 2, 3, 4]
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 grid:
   topology.target_avg_degree: [3, 4, 6, 8]
   routing.strategy: [spr, kar]

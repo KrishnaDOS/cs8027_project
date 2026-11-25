@@ -102,8 +102,9 @@ def section_e2(results_dir: Path) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def section_e3(results_dir: Path) -> str:
-    summary, _ = load_results(results_dir, "e3_mesh_density")
+def section_e3(results_dir: Path, exp: str = "e3_mesh_density",
+               heading: str = "## E3: mesh density") -> str:
+    summary, _ = load_results(results_dir, exp)
     per = e3_per_degree(summary).sort_values("target_degree")
     rows = []
     for r in per.itertuples():
@@ -113,11 +114,16 @@ def section_e3(results_dir: Path) -> str:
                      pm(r.spr_throughput, r.spr_throughput_ci, thousands=True),
                      pm(r.kar_throughput, r.kar_throughput_ci, thousands=True),
                      f"{r.n_bridges:.1f}", f"{r.max_bridge_share:.3f}", f"{r.rho_sat:.3f}"])
-    rho = summary["offered_load"].iloc[0]
+    lam = summary["lambda_per_s"].round(6)
+    if lam.nunique() == 1 and summary["offered_load"].round(6).nunique() > 1:
+        load = (f"Fixed arrival rate lambda = {lam.iloc[0]:.4f} req/s (rho varies by topology: "
+                f"{summary['offered_load'].min():.3f}–{summary['offered_load'].max():.3f})")
+    else:
+        load = f"rho = {summary['offered_load'].iloc[0]:g}"
     return "\n\n".join(p for p in [
-        "## E3: mesh density",
-        provenance(results_dir, "e3_mesh_density"),
-        f"rho = {rho:g}; {int(per['n_topologies'].max())} topologies per degree (topology seed = run "
+        heading,
+        provenance(results_dir, exp),
+        f"{load}; {int(per['n_topologies'].max())} topologies per degree (topology seed = run "
         "seed), SPR and KAR paired on the same topologies. Relative reduction = 1 − mean KAR "
         "outage / mean SPR outage. Bridge columns are means over the topologies.",
         md_table(["Target degree", "Achieved degree", "SPR outage", "KAR outage", "Relative reduction",
@@ -137,11 +143,21 @@ def section_e1(results_dir: Path) -> str:
              pm(r["latency_p95_s_mean"], r["latency_p95_s_ci"], 4)]
             for _, r in stats.sort_values(["traffic.offered_load", "routing.strategy"],
                                           ascending=[True, False]).iterrows()]
+    # SPR = KAR sanity check: compare each KAR run with the SPR run on the same rho and seed.
+    checks = []
+    for _, kar in summary[summary["routing.strategy"] == "kar"].iterrows():
+        spr = summary[(summary["routing.strategy"] == "spr") & (summary["seed"] == kar["seed"])
+                      & (summary["traffic.offered_load"] == kar["traffic.offered_load"])]
+        cols = ["offered", "delivered", "outage"] + metrics
+        same = (not spr.empty) and all(spr.iloc[0][c] == kar[c] or (pd.isna(spr.iloc[0][c]) and pd.isna(kar[c]))
+                                       for c in cols)
+        verdict = "identical to SPR" if same else ("no matching SPR run" if spr.empty else "DIFFERS from SPR")
+        checks.append(f"rho = {kar['traffic.offered_load']:g}, seed {int(kar['seed'])}: {verdict}")
+    sanity = (" KAR sanity run(s), no CI: " + "; ".join(checks) + ".") if checks else ""
     return "\n\n".join(p for p in [
         "## E1: chain (whole-run summary; per-hop breakdown is in the figures)",
         provenance(results_dir, "e1_chain_hops"),
-        f"rho_sat = {summary['rho_sat'].iloc[0]:.3f}. The single KAR run (rho = 0.5, seed 0) is the "
-        "SPR = KAR sanity check; it has no CI.",
+        f"rho_sat = {summary['rho_sat'].iloc[0]:.3f}.{sanity}",
         md_table(["rho", "Router", "Seeds", "Outage", "Throughput (bit/s)", "Mean latency (s)",
                   "p95 latency (s)"], rows, "llrrrrr"),
     ] if p)
@@ -168,10 +184,16 @@ def section_e4(results_dir: Path) -> str:
     ] if p)
 
 
+def section_e3b(results_dir: Path) -> str:
+    return section_e3(results_dir, "e3b_mesh_density_fixed_lambda",
+                      "## E3b: mesh density at a fixed arrival rate")
+
+
 SECTIONS = [
     ("e2_mesh_load", section_diagnostics),
     ("e2_mesh_load", section_e2),
     ("e3_mesh_density", section_e3),
+    ("e3b_mesh_density_fixed_lambda", section_e3b),
     ("e1_chain_hops", section_e1),
     ("e4_secoqc", section_e4),
 ]
@@ -184,7 +206,7 @@ def make_tables(results_dir: Path, out_path: Path) -> Path:
     for exp, section in SECTIONS:
         if not (results_dir / exp / "summary.csv").exists():
             parts.append(f"_{section.__name__.replace('section_', '').upper()}: no results in "
-                         f"`{results_dir / exp}`; skipped._")
+                         f"`{results_dir.name}/{exp}`; skipped._")
             continue
         parts.append(section(results_dir))
     out_path.parent.mkdir(parents=True, exist_ok=True)

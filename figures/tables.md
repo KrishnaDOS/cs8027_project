@@ -56,11 +56,13 @@ rho = 0.3; 5 topologies per degree (topology seed = run seed), SPR and KAR paire
 | 6 | 6.27 ± 0.78 | 0.178 ± 0.093 | 0.106 ± 0.132 | 40.1% | 42,377 ± 6,764 | 46,119 ± 9,594 | 1.6 | 0.109 | 0.140 |
 | 8 | 8.69 ± 1.03 | 0.143 ± 0.044 | 0.036 ± 0.100 | 74.9% | 78,688 ± 15,529 | 88,753 ± 20,889 | 0.4 | 0.048 | 0.115 |
 
+_E3B: no results in `results/e3b_mesh_density_fixed_lambda`; skipped._
+
 ## E1: chain (whole-run summary; per-hop breakdown is in the figures)
 
 _Source: `results/e1_chain_hops`, 16 runs, commit `5750866`, finished 2026-11-25T18:26:43+00:00._
 
-rho_sat = 0.688. The single KAR run (rho = 0.5, seed 0) is the SPR = KAR sanity check; it has no CI.
+rho_sat = 0.688. KAR sanity run(s), no CI: rho = 0.5, seed 0: identical to SPR.
 
 | rho | Router | Seeds | Outage | Throughput (bit/s) | Mean latency (s) | p95 latency (s) |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |

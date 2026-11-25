@@ -290,7 +290,7 @@ def run_experiment(exp: Experiment, workers: int, log=print) -> dict[str, Any]:
                     failed.append({"run_id": futures[future], "error": repr(exc)})
                     log(f"  FAILED {futures[future]}: {exc!r}")
 
-    n_rows = aggregate(exp)
+    n_rows = aggregate(exp, log=log)
     end = datetime.now(timezone.utc)
     meta_path = exp.out_dir / "meta.json"
     history = []
@@ -329,8 +329,19 @@ def run_experiment(exp: Experiment, workers: int, log=print) -> dict[str, Any]:
             "rows": n_rows}
 
 
-def aggregate(exp: Experiment) -> int:
-    """Write summary.csv and by_hops.csv from the completed run files of this expansion."""
+def aggregate(exp: Experiment, log=print) -> int:
+    """Write summary.csv and by_hops.csv from the completed run files of this expansion.
+
+    Only run files whose run_id belongs to the current config's grid are included. Other
+    files in runs/ (e.g. left over from an earlier grid) are reported and skipped, never
+    deleted, so a config change cannot silently mix old points into the aggregates.
+    """
+    current = {spec.run_id for spec in exp.runs}
+    strays = sorted(p.stem for p in (exp.out_dir / "runs").glob("*.json") if p.stem not in current)
+    if strays:
+        shown = ", ".join(strays[:5]) + (f", ... (+{len(strays) - 5} more)" if len(strays) > 5 else "")
+        log(f"WARNING: {len(strays)} run file(s) in {exp.out_dir / 'runs'} are not in the current "
+            f"grid and were skipped: {shown}")
     rows, hop_rows = [], []
     for spec in exp.runs:
         path = run_path(exp.out_dir, spec.run_id)

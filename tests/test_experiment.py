@@ -58,8 +58,9 @@ def quiet(*_args, **_kwargs) -> None:
 @pytest.mark.parametrize(("name", "n_full", "n_quick"), [
     ("e1_chain_hops", 3 * 5 + 1, 3 * 3 + 1),      # SPR grid + one KAR sanity run (seed 0)
     ("e2_mesh_load", 2 * 9 * 2 * 5, 2 * 9 * 2 * 3),  # meshes x rho x routers x seeds
-    ("e3_mesh_density", 4 * 2 * 5, 4 * 2 * 3),     # degrees x routers x seeds
-    ("e4_secoqc", 3 * 2 * 5, 3 * 2 * 3),           # rho x routers x seeds
+    ("e3_mesh_density", 4 * 2 * 20, 4 * 2 * 3),    # degrees x routers x 20 topology seeds
+    ("e3b_mesh_density_fixed_lambda", 4 * 2 * 20, 4 * 2 * 3),
+    ("e4_secoqc", 4 * 2 * 5, 4 * 2 * 3),           # rho x routers x seeds
 ])
 def test_grid_expansion_counts(name: str, n_full: int, n_quick: int, tmp_path: Path) -> None:
     full = load_experiment(CONFIGS / f"{name}.yaml", results_dir=tmp_path)
@@ -88,8 +89,21 @@ def test_e1_kar_sanity_run_and_quick_seed(tmp_path: Path) -> None:
     for quick in (False, True):
         exp = load_experiment(CONFIGS / "e1_chain_hops.yaml", quick=quick, results_dir=tmp_path)
         kar = [r for r in exp.runs if r.config["routing"]["strategy"] == "kar"]
-        assert [(r.params["traffic.offered_load"], r.seed) for r in kar] == [(0.5, 0)]
+        assert [(r.params["traffic.offered_load"], r.seed) for r in kar] == [(0.8, 0)]
         assert all(r.config["topology"]["type"] == "chain" for r in exp.runs)
+        assert {r.config["traffic"]["offered_load"] for r in exp.runs} == {0.65, 0.8, 0.95}
+
+
+def test_e3b_fixes_lambda_on_e3_grid(tmp_path: Path) -> None:
+    e3 = load_experiment(CONFIGS / "e3_mesh_density.yaml", results_dir=tmp_path)
+    e3b = load_experiment(CONFIGS / "e3b_mesh_density_fixed_lambda.yaml", results_dir=tmp_path)
+    assert [r.run_id for r in e3b.runs] == [r.run_id for r in e3.runs]  # same grid and seeds
+    for r in e3b.runs:
+        assert r.config["traffic"]["offered_load"] is None
+        assert r.config["traffic"]["arrival_rate_per_s"] == pytest.approx(95.1826)
+    for a, b in zip(e3.runs, e3b.runs):  # identical topologies: only the traffic differs
+        assert a.config["topology"] == b.config["topology"]
+    assert "95.182639" in (CONFIGS / "e3b_mesh_density_fixed_lambda.yaml").read_text()  # derivation kept
 
 
 def test_e2_meshes_and_e3_topology_seeds(tmp_path: Path) -> None:
@@ -161,6 +175,24 @@ def test_run_resume_and_aggregate(tmp_path: Path) -> None:
         if f.name not in {exp.runs[0].run_id + ".json", exp.runs[1].run_id + ".json"}:
             assert f.stat().st_mtime_ns == mtimes[f.name]  # untouched
     assert len(json.loads((exp.out_dir / "meta.json").read_text())["history"]) == 2
+
+
+def test_aggregate_skips_runs_outside_current_grid(tmp_path: Path) -> None:
+    path = write_tiny_experiment(tmp_path)
+    exp = load_experiment(path, results_dir=tmp_path)
+    run_experiment(exp, workers=1, log=quiet)
+    # Shrink the grid (as when E1's rho values change): old files stay on disk.
+    path.write_text(path.read_text().replace("[0.1, 0.5]", "[0.5]"), encoding="utf-8")
+    smaller = load_experiment(path, results_dir=tmp_path)
+    messages: list[str] = []
+    counts = run_experiment(smaller, workers=1, log=messages.append)
+    assert counts == {"executed": 0, "skipped": 4, "failed": 0, "rows": 4}
+    warnings = [m for m in messages if m.startswith("WARNING")]
+    assert len(warnings) == 1 and "4 run file(s)" in warnings[0] and "rho=0.1" in warnings[0]
+    summary = pd.read_csv(smaller.out_dir / "summary.csv")
+    assert set(summary["traffic.offered_load"]) == {0.5}
+    assert set(pd.read_csv(smaller.out_dir / "by_hops.csv")["traffic.offered_load"]) == {0.5}
+    assert len(list((smaller.out_dir / "runs").glob("*.json"))) == 8  # nothing deleted
 
 
 def test_parallel_matches_serial(tmp_path: Path) -> None:

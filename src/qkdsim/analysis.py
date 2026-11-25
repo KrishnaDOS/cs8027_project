@@ -112,6 +112,64 @@ def mesh_diagnostics(summary: pd.DataFrame) -> pd.DataFrame:
     return diag.loc[order]
 
 
+def hop_bins(max_hops: int, n_bins: int = 6) -> list[tuple[int, int]]:
+    """About n_bins contiguous hop ranges covering 1..max_hops, e.g. 31 -> 1-5, ..., 26-31.
+
+    Bins have equal width round(max_hops / n_bins); a last bin narrower than half that
+    width is merged into the previous one.
+    """
+    width = max(1, round(max_hops / n_bins))
+    bins = [(lo, min(lo + width - 1, max_hops)) for lo in range(1, max_hops + 1, width)]
+    if len(bins) > 1 and (bins[-1][1] - bins[-1][0] + 1) < width / 2:
+        bins[-2:] = [(bins[-2][0], bins[-1][1])]
+    return bins
+
+
+def bin_label(lo: int, hi: int) -> str:
+    return f"{lo}" if lo == hi else f"{lo}–{hi}"
+
+
+def binned_by_hops(by_hops: pd.DataFrame, bins: Sequence[tuple[int, int]],
+                   keys: Sequence[str]) -> pd.DataFrame:
+    """Pool by_hops rows into hop bins, per `keys` + seed.
+
+    outage_probability = outages / requests in the bin; latency_mean_s is weighted by the
+    number of delivered requests per hop count (NaN when none were delivered).
+    """
+    df = by_hops.copy()
+    edges = {h: i for i, (lo, hi) in enumerate(bins) for h in range(lo, hi + 1)}
+    df["bin"] = df["hops"].map(edges)
+    df = df.dropna(subset=["bin"])
+    df["outages"] = df["count"] * df["outage_probability"]
+    df["delivered"] = df["count"] - df["outages"]
+    df["latency_x_delivered"] = df["latency_mean_s"].fillna(0.0) * df["delivered"]
+    g = df.groupby(list(keys) + ["seed", "bin"], as_index=False)[
+        ["count", "outages", "delivered", "latency_x_delivered"]].sum()
+    g["outage_probability"] = g["outages"] / g["count"]
+    g["latency_mean_s"] = np.where(g["delivered"] > 0,
+                                   g["latency_x_delivered"] / g["delivered"].where(g["delivered"] > 0),
+                                   np.nan)
+    g["bin"] = g["bin"].astype(int)
+    g["bin_label"] = g["bin"].map(lambda i: bin_label(*bins[i]))
+    return g
+
+
+def per_topology_reduction(summary: pd.DataFrame,
+                           degree_key: str = "topology.target_avg_degree") -> pd.DataFrame:
+    """One row per (degree, seed) topology: SPR/KAR outage, 1 - KAR/SPR, bridge share.
+
+    Topologies where SPR has no outage are dropped (the reduction is undefined there).
+    """
+    wide = summary.pivot_table(index=[degree_key, "seed"], columns="routing.strategy",
+                               values="outage_probability").reset_index()
+    topo = (summary[summary["routing.strategy"] == "spr"]
+            .set_index([degree_key, "seed"])[["max_bridge_share", "avg_degree", "n_bridges"]])
+    wide = wide.join(topo, on=[degree_key, "seed"])
+    wide = wide[wide["spr"] > 0].copy()
+    wide["reduction"] = 1 - wide["kar"] / wide["spr"]
+    return wide.rename(columns={degree_key: "target_degree"})
+
+
 def relative_reduction(spr_mean: float, kar_mean: float) -> float:
     """1 - KAR/SPR on mean outage (NaN when SPR has no outage)."""
     return 1.0 - kar_mean / spr_mean if spr_mean > 0 else float("nan")

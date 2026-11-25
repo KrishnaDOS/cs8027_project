@@ -1,0 +1,22 @@
+name: e3b_mesh_density_fixed_lambda
+description: >
+  E3 with the arrival rate held fixed across degrees ("same demand, more links";
+  Addendum E). Same meshes as E3 (n=30, 50 km square, target degree {3, 4, 6, 8},
+  topology seed = run seed 0-19), SPR and KAR paired on identical seeds.
+# arrival_rate_per_s derivation (recorded 2026-11-25):
+#   The mean lambda_per_s of the E3 degree-4 runs at rho=0.3, read from
+#   results/e3_mesh_density/summary.csv (E3 as run at commit 5750866, topology seeds 0-4;
+#   SPR and KAR rows have identical lambda):
+#     seed 0: 86.473034   seed 1: 98.473720   seed 2: 78.667535
+#     seed 3: 96.054563   seed 4: 116.244341
+#     mean = 95.182639 req/s  ->  95.1826
+#   So E3b matches E3's demand at degree 4 (on average); sparser meshes get relatively
+#   more load than in E3, denser meshes relatively less.
+base: ../../configs/default.yaml
+overrides:
+  topology: {type: random_mesh, n_nodes: 30, area_km: 50, seed: null}
+  traffic: {offered_load: null, arrival_rate_per_s: 95.1826}
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+grid:
+  topology.target_avg_degree: [3, 4, 6, 8]
+  routing.strategy: [spr, kar]

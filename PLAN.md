@@ -282,3 +282,9 @@ Chen 2021 npj (Hefei 46-node network), Sasaki 2011 (Tokyo), Raubitzek 2026 (Aust
 - E3 rho changes from 0.6 to 0.3 (rho_sat ≈ 0.16 on degree-4 meshes, so 0.6 saturates everything). Topology seeds 0–4 per degree, paired SPR/KAR on identical seeds. Report n_bridges and max_bridge_share per degree.
 - E1 runs SPR only (SPR = KAR on a chain), plus one KAR run as a sanity check.
 - Runner writes one result file per run, supports resume, and offers --dry-run and --quick modes.
+
+## Addendum E — Post-M5 refinements
+- E1 rho moved to {0.65, 0.8, 0.95} around the chain's rho_sat ≈ 0.69; hop counts are binned in figures.
+- E3 uses 20 topology seeds per degree. Rho normalizes by total link rate, and denser meshes add mostly peripheral capacity, so at fixed rho they are relatively more loaded at their bottleneck. E3b therefore holds the arrival rate fixed across degrees ("same demand, more links").
+- E4 rho moved to {0.05, 0.1, 0.15, 0.3} (SECOQC rho_sat ≈ 0.10).
+- New headline figure: KAR gain vs max bridge share, per topology.

@@ -30,12 +30,16 @@ from qkdsim.analysis import (  # noqa: E402
     MESH_ORDER,
     ROUTER_LABEL,
     ROUTER_ORDER,
+    bin_label,
+    binned_by_hops,
     e3_per_degree,
     group_ci,
+    hop_bins,
     key_size_bits,
     load_results,
     mesh_diagnostics,
     paired_difference,
+    per_topology_reduction,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -52,9 +56,10 @@ RHO_RAMP = ["#84b9f3", "#2370cd", "#0e3d7e"]  # ordinal blue ramp (steps 250/500
 RHO_MARKERS = ["o", "s", "^", "D", "v"]
 
 MESH_TITLE = {"mesh0": "mesh0 (default)", "diverse": "diverse"}
-EXPERIMENTS = ("e1_chain_hops", "e2_mesh_load", "e3_mesh_density", "e4_secoqc", "topology")
+EXPERIMENTS = ("e1_chain_hops", "e2_mesh_load", "e3_mesh_density", "e3b_mesh_density_fixed_lambda",
+               "e4_secoqc", "topology")
 ALIASES = {"e1": "e1_chain_hops", "e2": "e2_mesh_load", "e3": "e3_mesh_density",
-           "e4": "e4_secoqc", "topo": "topology"}
+           "e3b": "e3b_mesh_density_fixed_lambda", "e4": "e4_secoqc", "topo": "topology"}
 
 
 class Style:
@@ -131,6 +136,12 @@ def plot_e1(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
     hops = hops[hops["routing.strategy"] == "spr"]
     rhos = sorted(hops["traffic.offered_load"].unique())
     rho_sat = summary["rho_sat"].iloc[0]
+    # Bin hop counts (~6 bins): per-hop curves are noisy at long paths, where few node
+    # pairs exist (a 32-node chain has only 2 ordered pairs 31 hops apart).
+    bins = hop_bins(int(hops["hops"].max()))
+    binned = binned_by_hops(hops, bins, ["traffic.offered_load"])
+    x = np.arange(len(bins))
+    dodge = 0.08
     paths = []
     for metric, name, ylabel, note in (
         ("outage_probability", "e1_outage_vs_hops", "Outage probability", None),
@@ -138,20 +149,20 @@ def plot_e1(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
          "latency of delivered requests only"),
     ):
         fig, ax = plt.subplots(figsize=style.size(1, 0.62), layout="constrained")
-        stats = group_ci(hops, ["traffic.offered_load", "hops"], [metric])
+        stats = group_ci(binned, ["traffic.offered_load", "bin"], [metric])
         for i, rho in enumerate(rhos):
-            s = stats[stats["traffic.offered_load"] == rho].sort_values("hops")
-            mean, ci = s[f"{metric}_mean"].to_numpy(), np.nan_to_num(s[f"{metric}_ci"].to_numpy())
+            s = stats[stats["traffic.offered_load"] == rho].set_index("bin").reindex(range(len(bins)))
             color = RHO_RAMP[i % len(RHO_RAMP)]
-            ax.plot(s["hops"], mean, color=color, marker=RHO_MARKERS[i % len(RHO_MARKERS)],
-                    markevery=3, label=f"ρ = {rho:g}")
-            ax.fill_between(s["hops"], mean - ci, mean + ci, color=color, alpha=0.2, linewidth=0)
-        ax.set_xlabel("SPR path length (hops)")
+            ax.errorbar(x + (i - (len(rhos) - 1) / 2) * dodge, s[f"{metric}_mean"],
+                        yerr=np.nan_to_num(s[f"{metric}_ci"]), color=color,
+                        marker=RHO_MARKERS[i % len(RHO_MARKERS)], markeredgecolor="white",
+                        markeredgewidth=0.6, label=f"ρ = {rho:g}")
+        ax.set_xticks(x, [bin_label(*b) for b in bins])
+        ax.set_xlabel("SPR path length (hops, binned)")
         ax.set_ylabel(ylabel)
-        ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
         title = f"Chain, {summary['n_nodes'].iloc[0]} nodes, SPR (KAR identical on a chain)"
-        sub = f"ρ_sat = {rho_sat:.2f}; shaded: 95% CI across seeds"
+        sub = f"ρ_sat = {rho_sat:.2f}; error bars: 95% CI across seeds"
         if note:
             sub = f"{note}; {sub}"
         # Lines below rho_sat coincide (no queueing); say so instead of hiding one silently.
@@ -293,16 +304,39 @@ def plot_e2_paired_gain(results_dir: Path, out_dir: Path, style: Style) -> list[
 # --------------------------------------------------------------------------- E3
 
 
+E3_EXP, E3B_EXP = "e3_mesh_density", "e3b_mesh_density_fixed_lambda"
+DEGREE_RAMP = ["#84b9f3", "#338ced", "#1b64be", "#0e3d7e"]  # ordinal blue ramp, steps 250-700
+
+
+def load_text(summary: pd.DataFrame) -> str:
+    """'ρ = 0.3' for fixed-rho sweeps, 'λ = 95.2 req/s' when the arrival rate is fixed."""
+    lam = summary["lambda_per_s"].round(6)
+    if lam.nunique() == 1 and summary["offered_load"].round(6).nunique() > 1:
+        return f"λ = {lam.iloc[0]:.1f} req/s (fixed)"
+    return f"ρ = {summary['offered_load'].iloc[0]:g}"
+
+
 def plot_e3(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
-    summary, _ = load_results(results_dir, "e3_mesh_density")
+    paths = plot_e3_family(results_dir, out_dir, style, E3_EXP, "e3")
+    return paths + plot_gain_vs_bridge_share(results_dir, out_dir, style)
+
+
+def plot_e3b(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
+    return plot_e3_family(results_dir, out_dir, style, E3B_EXP, "e3b")
+
+
+def plot_e3_family(results_dir: Path, out_dir: Path, style: Style, exp: str,
+                   prefix: str) -> list[Path]:
+    """Outage, throughput and KAR gain vs achieved degree, for E3 or E3b."""
+    summary, _ = load_results(results_dir, exp)
     per = e3_per_degree(summary).sort_values("achieved_degree")
-    rho = summary["offered_load"].iloc[0]
+    load = load_text(summary)
     n_topo = int(per["n_topologies"].max())
     dodge = 0.05 * (per["achieved_degree"].max() - per["achieved_degree"].min()) / 2
     paths = []
     for metric, name, ylabel in (
-        ("outage", "e3_outage_vs_degree", "Outage probability"),
-        ("throughput", "e3_throughput_vs_degree", "Delivered key throughput (bit/s)"),
+        ("outage", f"{prefix}_outage_vs_degree", "Outage probability"),
+        ("throughput", f"{prefix}_throughput_vs_degree", "Delivered key throughput (bit/s)"),
     ):
         fig, ax = plt.subplots(figsize=style.size(1, 0.62), layout="constrained")
         for i, router in enumerate(ROUTER_ORDER):  # small x offset so the CIs don't overlap
@@ -311,26 +345,26 @@ def plot_e3(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
         ax.set_xlabel("Achieved mean node degree")
         ax.set_ylabel(ylabel)
         ax.set_ylim(bottom=0)
-        ax.set_title(style.wrap(f"Random mesh, n = {summary['n_nodes'].iloc[0]}, ρ = {rho:g}; "
+        ax.set_title(style.wrap(f"Random mesh, n = {summary['n_nodes'].iloc[0]}, {load}; "
                                 f"{n_topo} topologies per degree, 95% CI"), loc="left")
         ax.legend(loc="best")
         paths += save(fig, out_dir, name, style)
 
-    # Relative reduction: ratio of means (line) plus each topology's own 1 - KAR/SPR (dots).
-    # With 5 topologies per degree the individual points are shown instead of a CI.
-    key = "topology.target_avg_degree"
-    wide = summary.pivot_table(index=[key, "seed"], columns="routing.strategy",
-                               values="outage_probability").reset_index()
-    wide = wide[wide["spr"] > 0]
-    wide["reduction"] = 1 - wide["kar"] / wide["spr"]
+    # Relative reduction: ratio of means (line) plus each topology's own 1 - KAR/SPR (dots),
+    # shown instead of a CI because per-topology reductions are bounded and very spread out.
+    wide = per_topology_reduction(summary)
     degree_x = dict(zip(per["target_degree"], per["achieved_degree"]))
     fig, ax = plt.subplots(figsize=style.size(1, 0.62), layout="constrained")
     ax.axhline(0.0, color=INK_2, linewidth=0.9)
-    # Fixed sideways offsets (not random) so stacked values, e.g. several 100%, stay countable.
-    rank = wide.groupby(key).cumcount() - (wide.groupby(key)[key].transform("size") - 1) / 2
+    # Fixed sideways offsets (not random) so stacked values, e.g. several 100%, stay countable;
+    # each degree's dots stay within half the smallest gap between degrees.
+    key = "target_degree"
+    sizes = wide.groupby(key)[key].transform("size")
+    rank = wide.groupby(key).cumcount() - (sizes - 1) / 2
     xs = np.sort(per["achieved_degree"].to_numpy())
-    spread = 0.12 * (np.diff(xs).min() if len(xs) > 1 else 1.0)  # groups never touch
-    ax.scatter(wide[key].map(degree_x) + rank * spread, 100 * wide["reduction"], s=14,
+    gap = np.diff(xs).min() if len(xs) > 1 else 1.0
+    spread = 0.5 * gap / max(int(sizes.max()) if len(sizes) else 1, 2)
+    ax.scatter(wide[key].map(degree_x) + rank * spread, 100 * wide["reduction"], s=10 if n_topo > 8 else 14,
                color=EDGE_GRAY, edgecolors="white", linewidths=0.5, zorder=2, label="one topology")
     ax.plot(per["achieved_degree"], 100 * per["relative_reduction"], color=NEUTRAL_SERIES,
             marker="o", markeredgecolor="white", markeredgewidth=0.6, zorder=3,
@@ -340,11 +374,50 @@ def plot_e3(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
     ax.set_xlabel("Achieved mean node degree\n(in parentheses: mean max bridge share)")
     ax.set_ylabel("KAR outage reduction vs SPR (%)")
     ax.set_ylim(min(-5, ax.get_ylim()[0]), 105)
-    ax.set_title(style.wrap(f"Random mesh, n = {summary['n_nodes'].iloc[0]}, ρ = {rho:g}; "
-                            f"{n_topo} topologies per degree"), loc="left")
+    n_dropped = n_topo * len(per) - len(wide)
+    dropped = f"; {n_dropped} topologies with no SPR outage omitted" if n_dropped else ""
+    ax.set_title(style.wrap(f"Random mesh, n = {summary['n_nodes'].iloc[0]}, {load}; "
+                            f"{n_topo} topologies per degree{dropped}"), loc="left")
     ax.legend(loc="upper left")
-    paths += save(fig, out_dir, "e3_kar_gain_vs_degree", style)
+    paths += save(fig, out_dir, f"{prefix}_kar_gain_vs_degree", style)
     return paths
+
+
+def plot_gain_vs_bridge_share(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
+    """Headline figure: KAR's relative outage reduction vs max bridge share, one dot per
+    topology, colored by target degree. Left: E3 (fixed rho); right: E3b (fixed lambda)."""
+    panels = [(E3_EXP, "E3"), (E3B_EXP, "E3b")]
+    fig, axes = plt.subplots(1, 2, figsize=style.size(2, 0.45), sharey=True, sharex=True,
+                             squeeze=False, layout="constrained")
+    degrees: list[float] = []
+    for ax, (exp, label) in zip(axes[0], panels):
+        ax.axhline(0.0, color=INK_2, linewidth=0.9)
+        if not (results_dir / exp / "summary.csv").exists():
+            ax.text(0.5, 0.5, f"no {label} results yet", transform=ax.transAxes,
+                    ha="center", va="center", color=INK_2)
+            ax.set_title(label, loc="left")
+            continue
+        summary, _ = load_results(results_dir, exp)
+        topo = per_topology_reduction(summary)
+        degrees = sorted(set(degrees) | set(topo["target_degree"]))
+        for i, degree in enumerate(sorted(topo["target_degree"].unique())):
+            t = topo[topo["target_degree"] == degree]
+            ax.scatter(t["max_bridge_share"], 100 * t["reduction"],
+                       color=DEGREE_RAMP[i % len(DEGREE_RAMP)], marker=RHO_MARKERS[i % len(RHO_MARKERS)],
+                       s=14 if style.ieee else 22, edgecolors="white", linewidths=0.5, zorder=2,
+                       alpha=0.85)  # topologies can share a bridge share; keep overlaps visible
+        n_total = summary[summary["routing.strategy"] == "spr"].shape[0]
+        omitted = n_total - len(topo)
+        note = f"; {omitted} with no SPR outage omitted" if omitted else ""
+        ax.set_title(style.wrap(f"{label}: {load_text(summary)}\n{len(topo)} topologies{note}"), loc="left")
+    axes[0][0].set_ylabel("KAR outage reduction vs SPR (%)")
+    fig.supxlabel("Max bridge share (fraction of node pairs whose SPR path crosses the largest bridge)"
+                  if not style.ieee else "Max bridge share", fontsize=style.label_size())
+    handles = [Line2D([], [], color=DEGREE_RAMP[i % len(DEGREE_RAMP)], marker=RHO_MARKERS[i % len(RHO_MARKERS)],
+                      linestyle="", markeredgecolor="white", label=f"{d:g}") for i, d in enumerate(degrees)]
+    if handles:
+        fig.legend(handles=handles, title="target degree", loc="outside upper center", ncol=len(handles))
+    return save(fig, out_dir, "e3_gain_vs_bridge_share", style)
 
 
 # --------------------------------------------------------------------------- E4
@@ -448,13 +521,16 @@ def plot_topology(results_dir: Path, out_dir: Path, style: Style,
 PLOTTERS: dict[str, Callable[[Path, Path, Style], list[Path]]] = {
     "e1_chain_hops": plot_e1,
     "e2_mesh_load": plot_e2,
-    "e3_mesh_density": plot_e3,
+    "e3_mesh_density": plot_e3,  # also e3_gain_vs_bridge_share (E3b panel if available)
+    "e3b_mesh_density_fixed_lambda": plot_e3b,
     "e4_secoqc": plot_e4,
     "topology": plot_topology,
 }
 # Which results directory each plotter reads (for --all skipping).
 SOURCE = {"e1_chain_hops": "e1_chain_hops", "e2_mesh_load": "e2_mesh_load",
-          "e3_mesh_density": "e3_mesh_density", "e4_secoqc": "e4_secoqc", "topology": "e2_mesh_load"}
+          "e3_mesh_density": "e3_mesh_density",
+          "e3b_mesh_density_fixed_lambda": "e3b_mesh_density_fixed_lambda",
+          "e4_secoqc": "e4_secoqc", "topology": "e2_mesh_load"}
 
 
 def make_plots(names: Sequence[str], results_dir: Path, out_dir: Path, ieee: bool = False,

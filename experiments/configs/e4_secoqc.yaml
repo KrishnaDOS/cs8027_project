@@ -2,12 +2,13 @@ name: e4_secoqc
 description: >
   Stretch (Addendum A.3): SECOQC Vienna network (6 nodes, 8 links) with measured per-link
   key rates from data/secoqc.yaml (two links use an assumed rate; a warning lists them).
-  SPR vs KAR at rho {0.3, 0.6, 0.9}, rho normalized by the sum of the actual link rates.
+  SPR vs KAR, rho normalized by the sum of the actual link rates. rho brackets SECOQC's
+  rho_sat ~= 0.10 (Addendum E).
 base: ../../configs/default.yaml
 overrides:
   topology: {type: secoqc}
   links: {rate_model: per_link}
 seeds: [0, 1, 2, 3, 4]
 grid:
-  traffic.offered_load: [0.3, 0.6, 0.9]
+  traffic.offered_load: [0.05, 0.1, 0.15, 0.3]
   routing.strategy: [spr, kar]

@@ -13,10 +13,14 @@ import pandas as pd
 import pytest
 
 from qkdsim.analysis import (
+    bin_label,
+    binned_by_hops,
     e3_per_degree,
+    hop_bins,
     key_size_bits,
     mean_ci,
     paired_difference,
+    per_topology_reduction,
     t_crit_95,
 )
 from qkdsim.config import config_from_dict
@@ -31,7 +35,10 @@ FIGURES = {
     "e1_chain_hops": ["e1_outage_vs_hops", "e1_latency_vs_hops"],
     "e2_mesh_load": ["e2_outage_vs_rho", "e2_throughput_vs_rho", "e2_latency_vs_rho",
                      "e2_utilization_vs_rho", "e2_paired_gain"],
-    "e3_mesh_density": ["e3_outage_vs_degree", "e3_throughput_vs_degree", "e3_kar_gain_vs_degree"],
+    "e3_mesh_density": ["e3_outage_vs_degree", "e3_throughput_vs_degree", "e3_kar_gain_vs_degree",
+                        "e3_gain_vs_bridge_share"],
+    "e3b_mesh_density_fixed_lambda": ["e3b_outage_vs_degree", "e3b_throughput_vs_degree",
+                                      "e3b_kar_gain_vs_degree"],
     "e4_secoqc": ["e4_secoqc_bars"],
     "topology": ["topo_mesh0_vs_diverse"],
 }
@@ -120,16 +127,19 @@ def results_dir(tmp_path_factory, template) -> Path:
                                         100 * rho, offered_load=rho, **diag)))
     write_experiment(root, "e2_mesh_load", e2, hop_cols)
 
-    e3 = []
-    for degree, mbs in ((3, 0.47), (4, 0.36), (6, 0.11)):
-        for router in ("spr", "kar"):
-            for s in seeds:
-                out = 0.2 - (0.02 * degree if router == "kar" else 0) + 0.01 * s
-                e3.append(({"topology.target_avg_degree": degree, "routing.strategy": router},
-                           fake_run(row0, {"routing.strategy": router}, s, rng, out, 50.0, offered_load=0.3,
-                                    avg_degree=degree + 0.1 * s, max_bridge_share=mbs + 0.01 * s,
-                                    n_bridges=5 - degree // 2, rho_sat=0.18, n_nodes=30)))
-    write_experiment(root, "e3_mesh_density", e3, hop_cols)
+    for exp, fixed_lambda in (("e3_mesh_density", False), ("e3b_mesh_density_fixed_lambda", True)):
+        e3 = []
+        for degree, mbs in ((3, 0.47), (4, 0.36), (6, 0.11)):
+            for router in ("spr", "kar"):
+                for s in seeds:
+                    out = 0.2 - (0.02 * degree if router == "kar" else 0) + 0.01 * s
+                    # E3b: lambda fixed, so the derived rho differs per topology.
+                    lam, rho = (95.1826, 0.3 * 4 / degree + 0.01 * s) if fixed_lambda else (10.0 * degree, 0.3)
+                    e3.append(({"topology.target_avg_degree": degree, "routing.strategy": router},
+                               fake_run(row0, {"routing.strategy": router}, s, rng, out, lam, offered_load=rho,
+                                        avg_degree=degree + 0.1 * s, max_bridge_share=mbs + 0.01 * s,
+                                        n_bridges=5 - degree // 2, rho_sat=0.18, n_nodes=30)))
+        write_experiment(root, exp, e3, hop_cols)
 
     e4 = [({"traffic.offered_load": rho, "routing.strategy": router},
            fake_run(row0, {"routing.strategy": router}, s, rng, 0.2 + rho / 4 - (0.03 if router == "kar" else 0),
@@ -174,6 +184,38 @@ def test_paired_difference() -> None:
     d = paired_difference(df, ["g"], "y").iloc[0]
     assert d["diff_mean"] == pytest.approx(-0.1)
     assert d["diff_ci"] == pytest.approx(0.0, abs=1e-12)  # identical per-seed differences
+
+
+def test_hop_bins() -> None:
+    bins = hop_bins(31)  # 32-node chain
+    assert bins == [(1, 5), (6, 10), (11, 15), (16, 20), (21, 25), (26, 31)]
+    assert [bin_label(*b) for b in bins][-1] == "26–31"
+    assert hop_bins(4) == [(1, 1), (2, 2), (3, 3), (4, 4)]
+    assert hop_bins(33) == [(1, 6), (7, 12), (13, 18), (19, 24), (25, 30), (31, 33)]
+    for n in range(1, 60):  # bins always tile 1..n exactly
+        b = hop_bins(n)
+        assert b[0][0] == 1 and b[-1][1] == n
+        assert all(hi + 1 == lo for (_, hi), (lo, _) in zip(b, b[1:]))
+
+
+def test_binned_by_hops_pools_requests() -> None:
+    df = pd.DataFrame({"rho": [0.8] * 3, "seed": [0] * 3, "hops": [1, 2, 3],
+                       "count": [100, 50, 10], "outage_probability": [0.0, 0.2, 1.0],
+                       "latency_mean_s": [1.0, 2.0, np.nan]})
+    g = binned_by_hops(df, [(1, 2), (3, 3)], ["rho"]).set_index("bin")
+    assert g.loc[0, "outage_probability"] == pytest.approx(10 / 150)  # pooled, not averaged
+    assert g.loc[0, "latency_mean_s"] == pytest.approx((100 * 1.0 + 40 * 2.0) / 140)  # per delivered
+    assert np.isnan(g.loc[1, "latency_mean_s"])  # nothing delivered at 3 hops
+    assert list(g["bin_label"]) == ["1–2", "3"]
+
+
+def test_per_topology_reduction(results_dir: Path) -> None:
+    summary = pd.read_csv(results_dir / "e3_mesh_density" / "summary.csv")
+    topo = per_topology_reduction(summary)
+    assert len(topo) == 3 * 3  # 3 degrees x 3 topology seeds, SPR outage > 0 in all
+    row = topo.iloc[0]
+    assert row["reduction"] == pytest.approx(1 - row["kar"] / row["spr"])
+    assert {"max_bridge_share", "target_degree", "seed"} <= set(topo.columns)
 
 
 def test_e3_per_degree_and_key_size(results_dir: Path) -> None:
@@ -239,14 +281,17 @@ def test_make_tables(results_dir: Path, tmp_path: Path) -> None:
     assert make_tables.main(["--results-dir", str(results_dir), "--out", str(out)]) == 0
     text = out.read_text(encoding="utf-8")
     for heading in ("## E2 mesh diagnostics", "## E2: SPR vs KAR", "### mesh0", "### diverse",
-                    "## E3: mesh density", "## E1: chain", "## E4: SECOQC"):
+                    "## E3: mesh density", "## E3b: mesh density at a fixed arrival rate",
+                    "## E1: chain", "## E4: SECOQC"):
         assert heading in text
+    assert "Fixed arrival rate lambda = 95.1826 req/s" in text.split("## E3b")[1]
+    assert "rho = 0.5, seed 0: identical to SPR" in text  # E1 KAR sanity check is reported
     assert "| mesh0 | 0 | 4 | 0.434 | yes | 0.156 | 4.07 |" in text
     assert "| diverse | 8 | 5 | 0.129 | no | 0.172 | 4.13 |" in text
     # One row per rho in each E2 mesh table, and one per degree in E3.
     e2_mesh0 = text.split("### mesh0")[1].split("###")[0]
     assert sum(line.startswith("| 0.") for line in e2_mesh0.splitlines()) == 3
-    e3 = text.split("## E3")[1].split("## E1")[0]
+    e3 = text.split("## E3: mesh density")[1].split("## E3b")[0]
     assert sum(line.startswith(("| 3 ", "| 4 ", "| 6 ")) for line in e3.splitlines()) == 3
     assert " ± " in text
 
