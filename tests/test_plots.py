@@ -285,7 +285,9 @@ def test_make_tables(results_dir: Path, tmp_path: Path) -> None:
                     "## E1: chain", "## E4: SECOQC"):
         assert heading in text
     assert "Fixed arrival rate lambda = 95.1826 req/s" in text.split("## E3b")[1]
-    assert "rho = 0.5, seed 0: identical to SPR" in text  # E1 KAR sanity check is reported
+    # E1 KAR sanity check reports SPR's same-seed values next to KAR's.
+    assert "rho = 0.5, seed 0: KAR vs SPR (same seed) outage" in text
+    assert ": identical" in text.split("## E1")[1]
     assert "| mesh0 | 0 | 4 | 0.434 | yes | 0.156 | 4.07 |" in text
     assert "| diverse | 8 | 5 | 0.129 | no | 0.172 | 4.13 |" in text
     # One row per rho in each E2 mesh table, and one per degree in E3.

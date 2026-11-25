@@ -149,11 +149,21 @@ def section_e1(results_dir: Path) -> str:
         spr = summary[(summary["routing.strategy"] == "spr") & (summary["seed"] == kar["seed"])
                       & (summary["traffic.offered_load"] == kar["traffic.offered_load"])]
         cols = ["offered", "delivered", "outage"] + metrics
-        same = (not spr.empty) and all(spr.iloc[0][c] == kar[c] or (pd.isna(spr.iloc[0][c]) and pd.isna(kar[c]))
-                                       for c in cols)
-        verdict = "identical to SPR" if same else ("no matching SPR run" if spr.empty else "DIFFERS from SPR")
-        checks.append(f"rho = {kar['traffic.offered_load']:g}, seed {int(kar['seed'])}: {verdict}")
-    sanity = (" KAR sanity run(s), no CI: " + "; ".join(checks) + ".") if checks else ""
+        head = f"rho = {kar['traffic.offered_load']:g}, seed {int(kar['seed'])}"
+        if spr.empty:
+            checks.append(f"{head}: no matching SPR run")
+            continue
+        s = spr.iloc[0]
+        same = all(s[c] == kar[c] or (pd.isna(s[c]) and pd.isna(kar[c])) for c in cols)
+        # Same-seed values side by side (the table's SPR row is a 5-seed mean, not comparable).
+        checks.append(
+            f"{head}: KAR vs SPR (same seed) outage {kar['outage_probability']:.3f} vs "
+            f"{s['outage_probability']:.3f}, throughput {kar['delivered_throughput_bps']:,.0f} vs "
+            f"{s['delivered_throughput_bps']:,.0f} bit/s, mean latency {kar['latency_mean_s']:.4f} vs "
+            f"{s['latency_mean_s']:.4f} s: {'identical' if same else 'DIFFERENT'}")
+    sanity = (" SPR = KAR sanity check (one KAR run; the table's KAR row has no CI and should be "
+              "compared with SPR on the same seed, not with the SPR mean): " + "; ".join(checks) + ".") \
+        if checks else ""
     return "\n\n".join(p for p in [
         "## E1: chain (whole-run summary; per-hop breakdown is in the figures)",
         provenance(results_dir, "e1_chain_hops"),

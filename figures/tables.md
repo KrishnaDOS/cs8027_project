@@ -45,40 +45,52 @@ _Source: `results/e2_mesh_load`, 180 runs, commit `5750866`, finished 2026-11-25
 
 ## E3: mesh density
 
-_Source: `results/e3_mesh_density`, 40 runs, commit `5750866`, finished 2026-11-25T18:30:22+00:00._
+_Source: `results/e3_mesh_density`, 160 runs, commit `3547f95`, finished 2026-11-25T22:01:38+00:00._
 
-rho = 0.3; 5 topologies per degree (topology seed = run seed), SPR and KAR paired on the same topologies. Relative reduction = 1 − mean KAR outage / mean SPR outage. Bridge columns are means over the topologies.
+rho = 0.3; 20 topologies per degree (topology seed = run seed), SPR and KAR paired on the same topologies. Relative reduction = 1 − mean KAR outage / mean SPR outage. Bridge columns are means over the topologies.
 
 | Target degree | Achieved degree | SPR outage | KAR outage | Relative reduction | SPR throughput (bit/s) | KAR throughput (bit/s) | Mean bridges | Mean max bridge share | Mean rho_sat |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 3 | 3.24 ± 0.46 | 0.129 ± 0.080 | 0.122 ± 0.085 | 5.6% | 12,616 ± 2,111 | 12,719 ± 2,119 | 8.8 | 0.474 | 0.218 |
-| 4 | 4.20 ± 0.53 | 0.197 ± 0.124 | 0.163 ± 0.162 | 17.3% | 19,538 ± 5,340 | 20,410 ± 6,400 | 4.8 | 0.360 | 0.179 |
-| 6 | 6.27 ± 0.78 | 0.178 ± 0.093 | 0.106 ± 0.132 | 40.1% | 42,377 ± 6,764 | 46,119 ± 9,594 | 1.6 | 0.109 | 0.140 |
-| 8 | 8.69 ± 1.03 | 0.143 ± 0.044 | 0.036 ± 0.100 | 74.9% | 78,688 ± 15,529 | 88,753 ± 20,889 | 0.4 | 0.048 | 0.115 |
+| 3 | 3.31 ± 0.24 | 0.143 ± 0.044 | 0.131 ± 0.047 | 8.1% | 12,917 ± 998 | 13,115 ± 1,122 | 9.9 | 0.465 | 0.216 |
+| 4 | 4.21 ± 0.25 | 0.212 ± 0.053 | 0.174 ± 0.062 | 18.0% | 18,653 ± 2,091 | 19,626 ± 2,499 | 5.2 | 0.374 | 0.171 |
+| 6 | 6.04 ± 0.31 | 0.215 ± 0.053 | 0.117 ± 0.053 | 45.6% | 37,043 ± 4,930 | 41,621 ± 5,360 | 2.0 | 0.169 | 0.141 |
+| 8 | 8.11 ± 0.42 | 0.164 ± 0.039 | 0.044 ± 0.030 | 73.4% | 68,328 ± 7,852 | 77,753 ± 8,045 | 0.3 | 0.043 | 0.129 |
 
-_E3B: no results in `results/e3b_mesh_density_fixed_lambda`; skipped._
+## E3b: mesh density at a fixed arrival rate
+
+_Source: `results/e3b_mesh_density_fixed_lambda`, 160 runs, commit `3547f95`, finished 2026-11-25T22:08:59+00:00._
+
+Fixed arrival rate lambda = 95.1826 req/s (rho varies by topology: 0.065–0.661); 20 topologies per degree (topology seed = run seed), SPR and KAR paired on the same topologies. Relative reduction = 1 − mean KAR outage / mean SPR outage. Bridge columns are means over the topologies.
+
+| Target degree | Achieved degree | SPR outage | KAR outage | Relative reduction | SPR throughput (bit/s) | KAR throughput (bit/s) | Mean bridges | Mean max bridge share | Mean rho_sat |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | 3.31 ± 0.24 | 0.320 ± 0.031 | 0.306 ± 0.041 | 4.4% | 16,535 ± 740 | 16,879 ± 1,001 | 9.9 | 0.465 | 0.216 |
+| 4 | 4.21 ± 0.25 | 0.229 ± 0.058 | 0.188 ± 0.065 | 17.8% | 18,738 ± 1,400 | 19,729 ± 1,560 | 5.2 | 0.374 | 0.171 |
+| 6 | 6.04 ± 0.31 | 0.086 ± 0.051 | 0.038 ± 0.037 | 55.6% | 22,227 ± 1,223 | 23,385 ± 872 | 2.0 | 0.169 | 0.141 |
+| 8 | 8.11 ± 0.42 | 0.015 ± 0.025 | 0.003 ± 0.004 | 81.8% | 23,954 ± 599 | 24,248 ± 96 | 0.3 | 0.043 | 0.129 |
 
 ## E1: chain (whole-run summary; per-hop breakdown is in the figures)
 
-_Source: `results/e1_chain_hops`, 16 runs, commit `5750866`, finished 2026-11-25T18:26:43+00:00._
+_Source: `results/e1_chain_hops`, 16 runs, commit `3547f95`, finished 2026-11-25T21:51:39+00:00._
 
-rho_sat = 0.688. KAR sanity run(s), no CI: rho = 0.5, seed 0: identical to SPR.
+rho_sat = 0.688. SPR = KAR sanity check (one KAR run; the table's KAR row has no CI and should be compared with SPR on the same seed, not with the SPR mean): rho = 0.8, seed 0: KAR vs SPR (same seed) outage 0.059 vs 0.059, throughput 10,516 vs 10,516 bit/s, mean latency 2.0750 vs 2.0750 s: identical.
 
 | rho | Router | Seeds | Outage | Throughput (bit/s) | Mean latency (s) | p95 latency (s) |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| 0.2 | SPR | 5 | 0.000 ± 0.000 | 2,798 ± 60 | 0.0145 ± 0.0002 | 0.0330 ± 0.0000 |
-| 0.5 | SPR | 5 | 0.000 ± 0.000 | 6,986 ± 55 | 0.0145 ± 0.0001 | 0.0330 ± 0.0000 |
-| 0.5 | KAR | 1 | 0.000 | 7,020 | 0.0144 | 0.0330 |
+| 0.65 | SPR | 5 | 0.000 ± 0.000 | 9,080 ± 89 | 0.0145 ± 0.0001 | 0.0330 ± 0.0000 |
 | 0.8 | SPR | 5 | 0.057 ± 0.006 | 10,538 ± 31 | 1.9923 ± 0.1075 | 4.9972 ± 0.0036 |
+| 0.8 | KAR | 1 | 0.059 | 10,516 | 2.0750 | 4.9988 |
+| 0.95 | SPR | 5 | 0.149 ± 0.007 | 11,326 ± 67 | 2.4921 ± 0.0365 | 5.0126 ± 0.0003 |
 
 ## E4: SECOQC (per-link measured rates)
 
-_Source: `results/e4_secoqc`, 30 runs, commit `5750866`, finished 2026-11-25T18:30:37+00:00._
+_Source: `results/e4_secoqc`, 40 runs, commit `3547f95`, finished 2026-11-25T22:09:04+00:00._
 
 2 bridges, max bridge share 0.333, rho_sat = 0.100.
 
 | rho | SPR outage | KAR outage | SPR throughput (bit/s) | KAR throughput (bit/s) |
 | :--- | ---: | ---: | ---: | ---: |
+| 0.05 | 0.000 ± 0.000 | 0.000 ± 0.000 | 1,036 ± 38 | 1,036 ± 38 |
+| 0.1 | 0.000 ± 0.000 | 0.000 ± 0.000 | 2,087 ± 46 | 2,087 ± 46 |
+| 0.15 | 0.063 ± 0.013 | 0.063 ± 0.013 | 2,940 ± 35 | 2,940 ± 35 |
 | 0.3 | 0.216 ± 0.009 | 0.216 ± 0.009 | 4,910 ± 49 | 4,910 ± 49 |
-| 0.6 | 0.331 ± 0.003 | 0.278 ± 0.005 | 8,404 ± 34 | 9,069 ± 50 |
-| 0.9 | 0.391 ± 0.004 | 0.387 ± 0.002 | 11,489 ± 64 | 11,562 ± 34 |

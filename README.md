@@ -12,32 +12,73 @@ physical layer is only a key rate per link.
 
 ## Main results
 
-All numbers are means over seeds with 95% t-intervals; full tables are in
-[figures/tables.md](figures/tables.md). The E1, E3 and E4 numbers below come from the
-M5 runs, before the Addendum E grids (E1 ρ ∈ {0.65, 0.8, 0.95}, 20 topologies per E3 degree,
-new E3b, E4 ρ ∈ {0.05 … 0.3}); re-run those experiments and regenerate the tables to update them.
+Numbers are means across seeds with 95% t-intervals, taken from
+[figures/tables.md](figures/tables.md).
 
-E2's confidence intervals reflect traffic randomness on one fixed topology per mesh only
-(the 5 seeds vary arrivals and node pairs, not the graph), so they are narrow and say
+- **Routing only helps where paths are diverse (E2).** On the default 30-node mesh
+  (`mesh0`, topology seed 0), SPR's busiest link is a *bridge* whose removal would cut off
+  43.4% of node pairs, so no router can avoid it: SPR and KAR give the same outage at every
+  load except ρ = 1 (0.523 vs 0.519). On the `diverse` mesh (seed 8, largest bridge share
+  0.129), KAR removes outage entirely for 0.2 ≤ ρ ≤ 0.4 (SPR: 0.039–0.220) and roughly
+  halves it at ρ = 0.6 (0.315 → 0.149).
+- **KAR's gain grows with mesh density (E3, ρ = 0.3, 20 topologies per degree).** The
+  relative outage reduction (1 − mean KAR / mean SPR) rises from 8.1% at achieved degree
+  3.31 to 18.0% (4.21), 45.6% (6.04) and 73.4% (8.11), while the mean largest bridge share
+  falls from 0.465 to 0.043. SPR's own outage is not monotonic in degree (0.143, 0.212,
+  0.215, 0.164): ρ normalizes by total link rate, so at fixed ρ a denser mesh also carries
+  more traffic and is relatively more loaded at its bottleneck (mean `rho_sat` falls from
+  0.216 to 0.129).
+- **At a fixed arrival rate (E3b, λ = 95.1826 req/s for every degree)**, more links do
+  reduce outage: SPR 0.320 → 0.229 → 0.086 → 0.015 and KAR 0.306 → 0.188 → 0.038 → 0.003
+  from degree 3.31 to 8.11, with relative reductions of 4.4%, 17.8%, 55.6% and 81.8%. At
+  degree 8 the 81.8% is a ratio of two small numbers: absolute outage is 0.015 ± 0.025 for
+  SPR and 0.003 ± 0.004 for KAR, a difference of about 1.2 percentage points, and SPR's
+  interval includes zero.
+- **Headline figure** (`e3_gain_vs_bridge_share`): each topology's KAR gain against its
+  largest bridge share, for E3 and E3b. Large gains occur only on topologies whose largest
+  bridge carries a small share of node pairs; meshes dominated by one bridge gain little.
+  Topologies where SPR has no outage are omitted (the reduction is undefined there); the
+  panel titles give the counts.
+- **SPR concentrates load.** Links saturate far below ρ = 1: SPR's busiest link saturates
+  at ρ_sat = 0.688 on the 32-node chain, 0.100 on SECOQC, and on average 0.171 on the
+  degree-4 E3 meshes (0.216 at degree 3 down to 0.129 at degree 8).
+- **Chain (E1).** Below ρ_sat (ρ = 0.65) there is no outage; above it, outage is 0.057 at
+  ρ = 0.8 and 0.149 at ρ = 0.95 and grows with hop count (`e1_outage_vs_hops`). On a chain
+  SPR = KAR; the single KAR run (ρ = 0.8, seed 0) is identical to SPR on the same seed.
+- **SECOQC (E4).** No outage at ρ = 0.05 and 0.1; 0.063 at ρ = 0.15 and 0.216 at ρ = 0.3,
+  identical for SPR and KAR at every load. In a diagnostic run (ρ = 0.3, seed 0, both
+  routers) every outage involved St. Poelten (STP), whose only link, STP–BRT (700 bit/s
+  over 85 km, a bridge), held less than one key (256 bits) 98.8% of the time.
+
+**Confidence intervals in E2** reflect traffic randomness on one fixed topology per mesh
+only (the 5 seeds vary arrivals and node pairs, not the graph), so they are narrow and say
 nothing about other topologies; E3/E3b vary the topology and are the guide to that spread.
 
-- **Routing only helps where paths are diverse.** On the default 30-node mesh
-  (`mesh0`, topology seed 0), SPR's busiest link is a *bridge* used by 43% of node pairs, so
-  no router can avoid it: SPR and KAR give the same outage at every load (E2,
-  `figures/e2_outage_vs_rho.png`). On the `diverse` mesh (seed 8, no bridge carries more than
-  13% of pairs), KAR removes outage entirely for 0.2 ≤ ρ ≤ 0.4 (SPR: 4–22%) and halves it at
-  ρ = 0.6 (0.315 → 0.149).
-- **KAR's gain grows with mesh density** (E3, ρ = 0.3): the relative outage reduction rises
-  from 6% at degree 3.2 to 75% at degree 8.7, as the largest bridge share falls from 0.47 to
-  0.05. Spread across topologies is large (5 topologies per degree in this run). At fixed ρ
-  a denser mesh also receives a higher arrival rate (ρ normalizes by total link rate), so
-  E3b repeats the sweep at one fixed arrival rate ("same demand, more links"). The headline
-  figure `e3_gain_vs_bridge_share` plots each topology's KAR gain against its largest
-  bridge share, for E3 and E3b.
-- **SPR concentrates load**: links saturate far below ρ = 1. The load at which SPR's busiest
-  link saturates (`rho_sat`) has a median of 0.18 (range 0.10–0.27) over 50 degree-4 meshes,
-  and is 0.69 on the 32-node chain and 0.10 on SECOQC.
-- **On a chain SPR = KAR** (one path), and outage grows with hop count above `rho_sat` (E1).
+### E3 with 20 vs 5 topology seeds
+
+E3 was first run with 5 topologies per degree, then re-run with 20 (Addendum E). The
+qualitative result held, and the estimates tightened:
+
+| Target degree | Relative reduction, 5 → 20 seeds | SPR outage, 5 → 20 seeds | KAR outage, 5 → 20 seeds | Achieved degree, 5 → 20 |
+|---|---|---|---|---|
+| 3 | 5.6% → 8.1% | 0.129 ± 0.080 → 0.143 ± 0.044 | 0.122 ± 0.085 → 0.131 ± 0.047 | 3.24 → 3.31 |
+| 4 | 17.3% → 18.0% | 0.197 ± 0.124 → 0.212 ± 0.053 | 0.163 ± 0.162 → 0.174 ± 0.062 | 4.20 → 4.21 |
+| 6 | 40.1% → 45.6% | 0.178 ± 0.093 → 0.215 ± 0.053 | 0.106 ± 0.132 → 0.117 ± 0.053 | 6.27 → 6.04 |
+| 8 | 74.9% → 73.4% | 0.143 ± 0.044 → 0.164 ± 0.039 | 0.036 ± 0.100 → 0.044 ± 0.030 | 8.69 → 8.11 |
+
+Intervals shrank by roughly half (KAR at degree 8: ± 0.100 → ± 0.030), and SPR's peak at
+degrees 4–6 persisted. The first 5 seeds happened to give denser-than-average meshes at
+target degrees 6 and 8 (achieved 6.27 and 8.69 vs 6.04 and 8.11 over 20 seeds). The
+5-seed values come from `figures/tables.md` at commit `9e549eb`.
+
+### Provenance
+
+E2 results were produced at commit `5750866`; E1, E3, E3b and E4 at `3547f95`, all from
+clean working trees (`meta.json`). `git diff 5750866 3547f95` shows **no change** to the
+simulation code (`simulator.py`, `links.py`, `routing.py`, `traffic.py`, `topologies.py`,
+`metrics.py`), nor to `configs/` or `data/`; only `analysis.py` (plots and tables) and
+`experiment.py` (an aggregation warning) changed. The two commits therefore simulate the
+same model.
 
 ## Modeling assumptions
 
@@ -98,7 +139,7 @@ pip install -e .
 ## Test
 
 ```bash
-python -m pytest            # 130 tests, under a minute
+python -m pytest            # 136 tests, under a minute
 ```
 
 ## Run
@@ -116,16 +157,15 @@ utilization.
 
 ## Experiments
 
-| Config | What it varies | Runs (full / quick) | Projected wall-clock, 13 workers (full / quick) |
-|---|---|---|---|
-| `e1_chain_hops.yaml` | chain (32 nodes), ρ ∈ {0.65, 0.8, 0.95} around ρ_sat ≈ 0.69, SPR; one KAR sanity run at ρ = 0.8 | 16 / 10 | not yet measured; ≈ 1 min or less (est.) |
-| `e2_mesh_load.yaml` | two fixed meshes × ρ ∈ {0.05 … 1.0} (9 values) × SPR/KAR | 180 / 108 | ≤ 20 / ≤ 6.4 min (measured) |
-| `e3_mesh_density.yaml` | target degree ∈ {3, 4, 6, 8}, ρ = 0.3, 20 topologies, SPR/KAR | 160 / 24 | ≈ ≤ 4 / ≤ 0.3 min (est. from the 40-run dry run) |
-| `e3b_mesh_density_fixed_lambda.yaml` | as E3, but λ = 95.1826 req/s fixed (E3's mean degree-4 λ) | 160 / 24 | ≈ ≤ 4 / ≤ 0.3 min (est.) |
-| `e4_secoqc.yaml` | SECOQC with measured rates, ρ ∈ {0.05, 0.1, 0.15, 0.3} around ρ_sat ≈ 0.10, SPR/KAR | 40 / 24 | ≤ 0.2 / ≤ 0.1 min (est.) |
+| Config | What it varies | Runs (full / quick) |
+|---|---|---|
+| `e1_chain_hops.yaml` | chain (32 nodes), ρ ∈ {0.65, 0.8, 0.95} around ρ_sat = 0.688, SPR; one KAR sanity run at ρ = 0.8 | 16 / 10 |
+| `e2_mesh_load.yaml` | two fixed meshes × ρ ∈ {0.05 … 1.0} (9 values) × SPR/KAR | 180 / 108 |
+| `e3_mesh_density.yaml` | target degree ∈ {3, 4, 6, 8}, ρ = 0.3, 20 topologies, SPR/KAR | 160 / 24 |
+| `e3b_mesh_density_fixed_lambda.yaml` | as E3, but λ = 95.1826 req/s fixed (E3's mean degree-4 λ) | 160 / 24 |
+| `e4_secoqc.yaml` | SECOQC with measured rates, ρ ∈ {0.05, 0.1, 0.15, 0.3} around ρ_sat = 0.100, SPR/KAR | 40 / 24 |
 
-Estimates for the changed configs are scaled from earlier dry runs; run `--dry-run` for a
-measured projection.
+Use `--dry-run` to time the most expensive run and project the sweep's wall-clock.
 
 ```bash
 python experiments/run_experiment.py experiments/configs/e2_mesh_load.yaml --dry-run   # time + projection only
