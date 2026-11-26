@@ -194,10 +194,14 @@ python experiments/run_experiment.py experiments/configs/e2_mesh_load.yaml      
 
 Options: `--workers N` (default: CPU count − 1), `--results-dir DIR`. Each run is written to
 `results/<exp>/runs/<run_id>.json` as soon as it finishes; rerunning skips completed runs
-(resume), keyed by a hash of the run's full configuration and seed. **Code changes do not
-invalidate results**: delete the results folder after changing simulator code. Aggregates
+(resume), keyed by a hash of the run's full configuration, its seed and a code hash. The
+code hash covers every `.py` file in `src/qkdsim/` (including any new module) except
+`analysis.py`, `experiment.py` and `run.py`, plus every `data/*.yaml` file, with line
+endings normalized. So editing simulation code or topology data re-runs every run on the
+next invocation, a config change re-runs only the affected runs, and editing the
+plot/table helpers, the runner or the CLI leaves cached runs valid. Aggregates
 go to `summary.csv` (one row per run) and `by_hops.csv`; `meta.json` records the config
-hash, git commit (and whether the tree was dirty), start/end time and Python version.
+hash, code hash, git commit (and whether the tree was dirty), start/end time and Python version.
 `--quick` writes to `results/<exp>_quick/`. Aggregation includes only run files whose
 run id belongs to the current config's grid; others (e.g. from an earlier grid) are
 reported with a warning, skipped, and left on disk.

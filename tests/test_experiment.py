@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +18,7 @@ from qkdsim.experiment import (
     nest_dotted,
     run_experiment,
     run_path,
+    source_hash,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -204,6 +206,124 @@ def test_aggregate_skips_runs_outside_current_grid(tmp_path: Path) -> None:
     assert set(summary["traffic.offered_load"]) == {0.5}
     assert set(pd.read_csv(smaller.out_dir / "by_hops.csv")["traffic.offered_load"]) == {0.5}
     assert len(list((smaller.out_dir / "runs").glob("*.json"))) == 8  # nothing deleted
+
+
+def copy_package(tmp_path: Path) -> Path:
+    """A copy of src/qkdsim/ to edit, so the tests never touch the real sources."""
+    src = REPO_ROOT / "src" / "qkdsim"
+    dst = tmp_path / "qkdsim_copy"
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__"))
+    return dst
+
+
+def copy_data(tmp_path: Path) -> Path:
+    """A copy of data/*.yaml to edit (the real data/secoqc.yaml is only read)."""
+    dst = tmp_path / "data_copy"
+    dst.mkdir()
+    for f in (REPO_ROOT / "data").glob("*.yaml"):
+        (dst / f.name).write_bytes(f.read_bytes())
+    return dst
+
+
+def append_line(path: Path, line: str) -> None:
+    path.write_text(path.read_text(encoding="utf-8") + f"\n{line}\n", encoding="utf-8")
+
+
+def test_source_hash_defaults_and_normalization(tmp_path: Path) -> None:
+    pkg, data = copy_package(tmp_path), copy_data(tmp_path)
+    base = source_hash(pkg, data)
+    assert base == source_hash(pkg, data)  # deterministic
+    # Defaults are the real package and the real data folder.
+    assert source_hash() == source_hash(REPO_ROOT / "src" / "qkdsim", REPO_ROOT / "data") == base
+    # Line endings do not matter (CRLF vs LF checkouts hash the same), for code and data.
+    for f in (pkg / "simulator.py", data / "secoqc.yaml"):
+        f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    assert source_hash(pkg, data) == base
+    # __pycache__ is ignored.
+    (pkg / "__pycache__").mkdir(exist_ok=True)
+    (pkg / "__pycache__" / "x.py").write_text("junk", encoding="utf-8")
+    assert source_hash(pkg, data) == base
+
+
+@pytest.mark.parametrize("module", ["analysis.py", "experiment.py", "run.py"])
+def test_editing_excluded_module_keeps_hash(tmp_path: Path, module: str) -> None:
+    pkg, data = copy_package(tmp_path), copy_data(tmp_path)
+    base = source_hash(pkg, data)
+    append_line(pkg / module, "# plotting / runner / CLI edit")
+    assert source_hash(pkg, data) == base
+
+
+@pytest.mark.parametrize("module", ["simulator.py", "links.py", "routing.py", "traffic.py",
+                                    "topologies.py", "metrics.py", "config.py", "__init__.py"])
+def test_editing_simulation_module_changes_hash(tmp_path: Path, module: str) -> None:
+    pkg, data = copy_package(tmp_path), copy_data(tmp_path)
+    base = source_hash(pkg, data)
+    append_line(pkg / module, "# simulation edit")
+    assert source_hash(pkg, data) != base
+
+
+def test_adding_new_module_changes_hash(tmp_path: Path) -> None:
+    pkg, data = copy_package(tmp_path), copy_data(tmp_path)
+    base = source_hash(pkg, data)
+    (pkg / "new_module.py").write_text("X = 1\n", encoding="utf-8")
+    with_module = source_hash(pkg, data)
+    assert with_module != base
+    (pkg / "sub").mkdir()  # modules in subpackages count too
+    (pkg / "sub" / "deeper.py").write_text("Y = 2\n", encoding="utf-8")
+    assert source_hash(pkg, data) not in (base, with_module)
+
+
+def test_data_yaml_edits_and_additions_change_hash(tmp_path: Path) -> None:
+    pkg, data = copy_package(tmp_path), copy_data(tmp_path)
+    base = source_hash(pkg, data)
+    append_line(data / "secoqc.yaml", "# edited link note")
+    edited = source_hash(pkg, data)
+    assert edited != base
+    (data / "new_topology.yaml").write_text("name: x\n", encoding="utf-8")
+    added = source_hash(pkg, data)
+    assert added not in (base, edited)
+    (data / "notes.txt").write_text("not topology data", encoding="utf-8")  # only *.yaml counts
+    assert source_hash(pkg, data) == added
+
+
+def test_code_change_invalidates_cache_and_unchanged_code_resumes(tmp_path: Path) -> None:
+    pkg, data = copy_package(tmp_path), copy_data(tmp_path)
+    path = write_tiny_experiment(tmp_path)
+
+    def load():
+        return load_experiment(path, results_dir=tmp_path, source_dir=pkg, data_dir=data)
+
+    exp = load()
+    assert run_experiment(exp, workers=1, log=quiet)["executed"] == 8
+    meta = json.loads((exp.out_dir / "meta.json").read_text())
+    assert meta["code_hash"] == exp.code_hash == source_hash(pkg, data)
+    record = json.loads(run_path(exp.out_dir, exp.runs[0].run_id).read_text())
+    assert record["code_hash"] == exp.code_hash
+
+    # Unchanged code (and config): everything resumes.
+    same = load()
+    assert [r.config_hash for r in same.runs] == [r.config_hash for r in exp.runs]
+    assert run_experiment(same, workers=1, log=quiet) == {"executed": 0, "skipped": 8, "failed": 0, "rows": 8}
+
+    # Editing the plotting helpers does not invalidate anything.
+    append_line(pkg / "analysis.py", "# new plot helper")
+    assert run_experiment(load(), workers=1, log=quiet)["executed"] == 0
+
+    # Edit one simulator source file: every cached run is stale and re-runs.
+    append_line(pkg / "simulator.py", "# changed")
+    changed = load()
+    assert changed.code_hash != exp.code_hash
+    assert not {r.config_hash for r in changed.runs} & {r.config_hash for r in exp.runs}
+    assert run_experiment(changed, workers=1, log=quiet) == {"executed": 8, "skipped": 0, "failed": 0, "rows": 8}
+    meta = json.loads((exp.out_dir / "meta.json").read_text())
+    assert meta["code_hash"] == changed.code_hash
+    assert [h["code_hash"] for h in meta["history"]] == [exp.code_hash] * 3
+    # ...and with the changed code left in place, the next invocation resumes again.
+    assert run_experiment(load(), workers=1, log=quiet)["executed"] == 0
+
+    # Editing topology data also re-runs everything.
+    append_line(data / "secoqc.yaml", "# corrected link length")
+    assert run_experiment(load(), workers=1, log=quiet)["executed"] == 8
 
 
 def test_parallel_matches_serial(tmp_path: Path) -> None:

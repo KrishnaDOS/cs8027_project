@@ -18,12 +18,15 @@ Output (results/<name>/, or results/<name>_quick/ with --quick):
     runs/<run_id>.json   one file per run, written atomically as soon as the run finishes
     summary.csv          one row per run (grid parameters + metrics.summarize fields)
     by_hops.csv          per-run, per-hop-count breakdown
-    meta.json            provenance: config hash, git commit, times, Python version
+    meta.json            provenance: config hash, code hash, git commit, times, Python version
 
-Resume: a run is skipped when its file exists and records the same config hash (the
-hash of the fully resolved simulator config plus the seed). Changing the experiment
-config therefore re-runs exactly the affected runs. Code changes do NOT invalidate
-results; each run file records the git commit it was produced with.
+Resume: a run is skipped when its file exists and records the same cache key (stored as
+"config_hash"): the hash of the fully resolved simulator config, the seed, and the code
+hash (see source_hash: every .py file in src/qkdsim/ except analysis.py, experiment.py and
+run.py, plus every data/*.yaml file). Changing the experiment config re-runs exactly the
+affected runs; changing simulation code or topology data re-runs every run; editing the
+plotting helpers, the runner or the CLI does not. Each run file also records the code
+hash and the git commit.
 """
 
 from __future__ import annotations
@@ -52,6 +55,10 @@ from qkdsim.simulator import run_simulation
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RESULTS_DIR = REPO_ROOT / "results"
+SOURCE_DIR = Path(__file__).resolve().parent  # src/qkdsim
+DATA_DIR = REPO_ROOT / "data"
+# Modules that cannot change simulation results: plots/tables, this runner, the CLI.
+HASH_EXCLUDED_MODULES = frozenset({"analysis.py", "experiment.py", "run.py"})
 
 QUICK_DURATION_S = 300.0
 QUICK_WARMUP_S = 60.0
@@ -86,6 +93,7 @@ class Experiment:
     out_dir: Path
     file_sha256: str
     config_hash: str  # hash over all run hashes, in order
+    code_hash: str = ""  # source_hash() of the simulator package used for the cache keys
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -115,14 +123,52 @@ def make_run_id(variant: str | None, point: Mapping[str, Any], seed: int) -> str
     return "__".join(parts)
 
 
-def run_hash(config: Mapping[str, Any], seed: int) -> str:
-    payload = json.dumps({"config": config, "seed": seed}, sort_keys=True, default=str)
+def source_hash(src_dir: str | Path = SOURCE_DIR, data_dir: str | Path = DATA_DIR) -> str:
+    """SHA-256 of everything that can change a simulation result.
+
+    Included: every .py file under `src_dir` (the simulator package, so future modules
+    count automatically) except the top-level HASH_EXCLUDED_MODULES (analysis.py,
+    experiment.py, run.py), plus every `data_dir/*.yaml` file (topology data such as
+    SECOQC). Files are taken in sorted order; each contributes a tagged relative path and
+    its content with CRLF normalized to LF, so the hash does not depend on the checkout's
+    line endings. __pycache__ is ignored. Any edit, added or removed file changes the hash.
+    A missing data_dir contributes nothing.
+    """
+    src_dir, data_dir = Path(src_dir), Path(data_dir)
+    py_files = sorted(
+        p for p in src_dir.rglob("*.py")
+        if "__pycache__" not in p.parts and p.relative_to(src_dir).as_posix() not in HASH_EXCLUDED_MODULES
+    )
+    if not py_files:
+        raise FileNotFoundError(f"no simulator .py files under {src_dir}")
+    data_files = sorted(data_dir.glob("*.yaml")) if data_dir.is_dir() else []
+    digest = hashlib.sha256()
+    for tag, root, files in (("src", src_dir, py_files), ("data", data_dir, data_files)):
+        for p in files:
+            digest.update(f"{tag}:{p.relative_to(root).as_posix()}".encode())
+            digest.update(b"\0")
+            digest.update(p.read_bytes().replace(b"\r\n", b"\n"))
+            digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def run_hash(config: Mapping[str, Any], seed: int, code_hash: str) -> str:
+    """Resume cache key of one run: resolved config + seed + simulator source hash."""
+    payload = json.dumps({"config": config, "seed": seed, "code": code_hash},
+                         sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def load_experiment(path: str | Path, quick: bool = False,
-                    results_dir: str | Path = DEFAULT_RESULTS_DIR) -> Experiment:
-    """Read an experiment config and expand it into RunSpecs (validating every config)."""
+                    results_dir: str | Path = DEFAULT_RESULTS_DIR,
+                    source_dir: str | Path = SOURCE_DIR,
+                    data_dir: str | Path = DATA_DIR) -> Experiment:
+    """Read an experiment config and expand it into RunSpecs (validating every config).
+
+    `source_dir` (simulator package) and `data_dir` (topology data) feed the code hash in
+    every cache key; the defaults are the real ones, tests point them at copies.
+    """
+    code_hash = source_hash(source_dir, data_dir)
     path = Path(path).resolve()
     raw = read_yaml(path)
     unknown = sorted(set(raw) - EXPERIMENT_KEYS)
@@ -166,13 +212,14 @@ def load_experiment(path: str | Path, quick: bool = False,
                     raise ConfigError(f"{path.name}: duplicate run id {run_id}")
                 seen.add(run_id)
                 runs.append(RunSpec(run_id, label, {**variant_set, **point}, int(seed), config,
-                                    run_hash(config, int(seed))))
+                                    run_hash(config, int(seed), code_hash)))
 
     name = raw["name"] + ("_quick" if quick else "")
     all_hash = hashlib.sha256("".join(r.config_hash for r in runs).encode()).hexdigest()
     return Experiment(
         name=name, path=path, runs=runs, quick=quick, out_dir=Path(results_dir) / name,
-        file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(), config_hash=all_hash, raw=raw,
+        file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(), config_hash=all_hash,
+        code_hash=code_hash, raw=raw,
     )
 
 
@@ -226,7 +273,8 @@ def execute_run(task: dict[str, Any]) -> dict[str, Any]:
         "variant": task["variant"],
         "params": task["params"],
         "seed": task["seed"],
-        "config_hash": task["config_hash"],
+        "config_hash": task["config_hash"],  # resume cache key (config + seed + code)
+        "code_hash": task["code_hash"],
         "git_commit": task["git_commit"],
         "wall_s": wall_s,
         "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -262,7 +310,8 @@ def run_experiment(exp: Experiment, workers: int, log=print) -> dict[str, Any]:
     pending.sort(key=_cost_key, reverse=True)  # longest first: shorter makespan
     tasks = [{
         "run_id": r.run_id, "experiment": exp.name, "variant": r.variant, "params": r.params,
-        "seed": r.seed, "config": r.config, "config_hash": r.config_hash, "git_commit": commit,
+        "seed": r.seed, "config": r.config, "config_hash": r.config_hash,
+        "code_hash": exp.code_hash, "git_commit": commit,
         "path": str(run_path(exp.out_dir, r.run_id)),
     } for r in pending]
 
@@ -298,7 +347,8 @@ def run_experiment(exp: Experiment, workers: int, log=print) -> dict[str, Any]:
         try:
             old = json.loads(meta_path.read_text(encoding="utf-8"))
             history = old.get("history", []) + [{k: old.get(k) for k in
-                                                 ("start_time", "end_time", "git_commit", "n_executed")}]
+                                                 ("start_time", "end_time", "git_commit", "code_hash",
+                                                  "n_executed")}]
         except ValueError:
             pass
     meta = {
@@ -306,6 +356,7 @@ def run_experiment(exp: Experiment, workers: int, log=print) -> dict[str, Any]:
         "config_file": str(exp.path),
         "config_file_sha256": exp.file_sha256,
         "config_hash": exp.config_hash,
+        "code_hash": exp.code_hash,  # source_hash() of src/qkdsim/*.py, part of every cache key
         "git_commit": commit,
         "git_dirty": dirty,
         "python_version": sys.version,
