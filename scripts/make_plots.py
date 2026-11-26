@@ -6,7 +6,8 @@
 Every figure is written as PNG (200 dpi) and PDF. Error bars and bands are mean +/- 95%
 CI across seeds using Student's t (qkdsim.analysis). SPR and KAR keep one fixed color and
 marker in every figure. --ieee sizes figures for a 3.5 in IEEE column and appends
-"_ieee" to the file names.
+"_ieee" to the file names. --talk makes 16:9 slide versions (13.33 x 7.5 in, ~1.4x type,
+thicker lines) in <out-dir>/talk/ under the same file names.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from qkdsim.analysis import (  # noqa: E402
     ROUTER_ORDER,
     bin_label,
     binned_by_hops,
+    bridge_share_for_cut,
     e3_per_degree,
     group_ci,
     hop_bins,
@@ -40,6 +42,7 @@ from qkdsim.analysis import (  # noqa: E402
     mesh_diagnostics,
     paired_difference,
     per_topology_reduction,
+    spearman,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -62,13 +65,25 @@ ALIASES = {"e1": "e1_chain_hops", "e2": "e2_mesh_load", "e3": "e3_mesh_density",
            "e3b": "e3b_mesh_density_fixed_lambda", "e4": "e4_secoqc", "topo": "topology"}
 
 
+TALK_SIZE = (13.33, 7.5)  # 16:9 slide, inches
+TALK_SCALE = 1.4          # font scale for slides
+
+
 class Style:
-    def __init__(self, ieee: bool) -> None:
-        self.ieee = ieee
+    """Figure styling for three targets: default (report), --ieee (3.5 in column) and
+    --talk (16:9 slides, larger type, written to <out-dir>/talk/ with the same names)."""
+
+    def __init__(self, ieee: bool = False, talk: bool = False) -> None:
+        if ieee and talk:
+            raise ValueError("choose at most one of ieee and talk")
+        self.ieee, self.talk = ieee, talk
         self.suffix = "_ieee" if ieee else ""
+        self.subdir = "talk" if talk else ""
         self.width = 3.5 if ieee else 7.0
         self.single_width = 3.5 if ieee else 5.0
-        base = 7 if ieee else 9
+        base = 7 if ieee else (round(9 * TALK_SCALE) if talk else 9)
+        line_width = 1.2 if ieee else (2.2 if talk else 1.5)
+        marker_size = 3.5 if ieee else (7 if talk else 5)
         plt.rcParams.update({
             "font.size": base, "axes.titlesize": base, "axes.labelsize": base,
             "xtick.labelsize": base - 1, "ytick.labelsize": base - 1,
@@ -77,12 +92,19 @@ class Style:
             "xtick.color": INK_2, "ytick.color": INK_2, "axes.titlecolor": INK,
             "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6, "grid.linestyle": "-",
             "axes.axisbelow": True, "axes.spines.top": False, "axes.spines.right": False,
-            "lines.linewidth": 1.2 if ieee else 1.5, "lines.markersize": 3.5 if ieee else 5,
-            "errorbar.capsize": 2, "legend.frameon": False, "savefig.dpi": 200,
+            "lines.linewidth": line_width, "lines.markersize": marker_size,
+            "errorbar.capsize": 3 if talk else 2, "legend.frameon": False, "savefig.dpi": 200,
             "font.family": "sans-serif",
         })
 
+    @property
+    def exact_size(self) -> bool:
+        """IEEE and talk figures keep their exact canvas size (no tight bbox)."""
+        return self.ieee or self.talk
+
     def size(self, panels_wide: int, height_ratio: float) -> tuple[float, float]:
+        if self.talk:
+            return TALK_SIZE
         width = self.width if panels_wide > 1 else self.single_width
         if self.ieee and panels_wide > 1:
             height_ratio *= 1.35  # narrow column: give side-by-side panels more height
@@ -103,13 +125,14 @@ class Style:
 
 
 def save(fig: plt.Figure, out_dir: Path, name: str, style: Style) -> list[Path]:
+    out_dir = out_dir / style.subdir if style.subdir else out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for ext in ("png", "pdf"):
         path = out_dir / f"{name}{style.suffix}.{ext}"
-        # IEEE: keep the exact column width (a tight bbox can grow past 3.5 in); every figure
-        # uses constrained layout, so content already fits inside the figure.
-        fig.savefig(path, bbox_inches=None if style.ieee else "tight")
+        # IEEE / talk: keep the exact canvas (a tight bbox can grow past 3.5 in or change the
+        # 16:9 ratio); every figure uses constrained layout, so content fits inside it.
+        fig.savefig(path, bbox_inches=None if style.exact_size else "tight")
         paths.append(path)
     plt.close(fig)
     return paths
@@ -232,9 +255,52 @@ def _e2_panels(results_dir: Path, out_dir: Path, style: Style, metric: str, ylab
     return save(fig, out_dir, name, style)
 
 
+OVERLAP_TOL = 0.01  # max |SPR - KAR| mean outage for the curves to count as overlapping
+
+
+def kar_zero_outage_limit(s: pd.DataFrame) -> float | None:
+    """Largest rho such that KAR's mean outage is zero at every rho up to it (None if KAR
+    has outage already at the lowest load). `s` holds one mesh's summary rows."""
+    kar = (s[s["routing.strategy"] == "kar"].groupby("traffic.offered_load")["outage_probability"]
+           .mean().sort_index())
+    limit = None
+    for rho, outage in kar.items():
+        if outage > 0:
+            break
+        limit = float(rho)
+    return limit
+
+
+def _outage_notes(style: Style) -> Callable[[plt.Axes, pd.DataFrame, str], list[Line2D]]:
+    """Data-driven notes on the E2 outage panels: SPR/KAR overlap (e.g. a bridge-limited
+    mesh) and the load range above rho_sat where KAR still has zero outage. The IEEE
+    version breaks the text into short lines to fit the narrow panels."""
+    sep = "\n" if style.ieee else " "
+
+    def notes(ax: plt.Axes, s: pd.DataFrame, mesh: str) -> list[Line2D]:
+        fontsize = plt.rcParams["legend.fontsize"]
+        means = s.groupby(["traffic.offered_load", "routing.strategy"])["outage_probability"].mean().unstack()
+        rho_sat = float(s["rho_sat"].iloc[0])
+        if (means["spr"] - means["kar"]).abs().max() <= OVERLAP_TOL:
+            why = f"{sep}(all outages on a bridge)" if bool(s["bottleneck_is_bridge"].iloc[0]) else ""
+            ax.text(0.98, 0.04, f"SPR and KAR overlap{why}", transform=ax.transAxes, ha="right",
+                    va="bottom", color=INK_2, fontsize=fontsize)
+            return []
+        limit = kar_zero_outage_limit(s)
+        if limit is not None and limit > rho_sat and (means.loc[limit, "spr"] > 0):
+            ax.axvspan(rho_sat, limit, color=ROUTER_COLOR["kar"], alpha=0.10, linewidth=0, zorder=0)
+            ax.text(rho_sat + 0.01 * (ax.get_xlim()[1] - ax.get_xlim()[0]), 0.86,
+                    f"KAR: zero outage{sep}up to ρ = {limit:g}\n({limit / rho_sat:.1f} × ρ_sat)",
+                    transform=ax.get_xaxis_transform(), ha="left", va="top", color=INK_2,
+                    fontsize=fontsize)
+        return []
+
+    return notes
+
+
 def plot_e2(results_dir: Path, out_dir: Path, style: Style) -> list[Path]:
     paths = _e2_panels(results_dir, out_dir, style, "outage_probability", "Outage probability",
-                       "e2_outage_vs_rho")
+                       "e2_outage_vs_rho", _outage_notes(style))
 
     summary_all, _, _ = _e2_frames(results_dir)
     k_bits = key_size_bits(summary_all)
@@ -305,6 +371,7 @@ def plot_e2_paired_gain(results_dir: Path, out_dir: Path, style: Style) -> list[
 
 
 E3_EXP, E3B_EXP = "e3_mesh_density", "e3b_mesh_density_fixed_lambda"
+CUT_OFF_TICKS = (1, 2, 4, 9, 15)  # nodes cut off by the worst bridge (top axis ticks)
 DEGREE_RAMP = ["#84b9f3", "#338ced", "#1b64be", "#0e3d7e"]  # ordinal blue ramp, steps 250-700
 
 
@@ -404,13 +471,28 @@ def plot_gain_vs_bridge_share(results_dir: Path, out_dir: Path, style: Style) ->
             t = topo[topo["target_degree"] == degree]
             ax.scatter(t["max_bridge_share"], 100 * t["reduction"],
                        color=DEGREE_RAMP[i % len(DEGREE_RAMP)], marker=RHO_MARKERS[i % len(RHO_MARKERS)],
-                       s=14 if style.ieee else 22, edgecolors="white", linewidths=0.5, zorder=2,
+                       s=14 if style.ieee else (40 if style.talk else 22), edgecolors="white",
+                       linewidths=0.5, zorder=2,
                        alpha=0.85)  # topologies can share a bridge share; keep overlaps visible
         n_total = summary[summary["routing.strategy"] == "spr"].shape[0]
         omitted = n_total - len(topo)
         note = f"; {omitted} with no SPR outage omitted" if omitted else ""
-        ax.set_title(style.wrap(f"{label}: {load_text(summary)}\n{len(topo)} topologies{note}"), loc="left")
-    axes[0][0].set_ylabel("KAR outage reduction vs SPR (%)")
+        r_s = spearman(topo["max_bridge_share"], topo["reduction"])
+        if style.ieee:  # half-column panels: short stacked lines
+            title = (f"{label}: {load_text(summary)}\nSpearman r_s = {r_s:.2f}\n"
+                     f"{len(topo)} topologies ({omitted} omitted)")
+        else:
+            title = f"{label}: {load_text(summary)}; Spearman r_s = {r_s:.2f}\n{len(topo)} topologies{note}"
+        ax.set_title(title, loc="left")
+        # Top axis: a bridge that cuts k of n nodes off carries 2k(n-k)/(n(n-1)) of all pairs.
+        n_nodes = int(summary["n_nodes"].iloc[0])
+        top = ax.secondary_xaxis("top")
+        ks = [k for k in CUT_OFF_TICKS if k <= n_nodes // 2]
+        top.set_xticks([bridge_share_for_cut(k, n_nodes) for k in ks], [str(k) for k in ks])
+        top.set_xlabel("nodes cut off by worst bridge", fontsize=plt.rcParams["legend.fontsize"],
+                       color=INK_2)
+        top.tick_params(colors=INK_2)
+    axes[0][0].set_ylabel("KAR outage reduction (%)" if style.ieee else "KAR outage reduction vs SPR (%)")
     fig.supxlabel("Max bridge share (fraction of node pairs whose SPR path crosses the largest bridge)"
                   if not style.ieee else "Max bridge share", fontsize=style.label_size())
     handles = [Line2D([], [], color=DEGREE_RAMP[i % len(DEGREE_RAMP)], marker=RHO_MARKERS[i % len(RHO_MARKERS)],
@@ -495,12 +577,6 @@ def plot_topology(results_dir: Path, out_dir: Path, style: Style,
         xy = np.array([pos[n] for n in G.nodes])
         ax.scatter(xy[:, 0], xy[:, 1], s=10 if style.ieee else 16, color=INK, zorder=3,
                    edgecolors="white", linewidths=0.6)
-        busiest = max(shares, key=shares.get)
-        (x1, y1), (x2, y2) = pos[busiest[0]], pos[busiest[1]]
-        ax.annotate(f"busiest: b = {shares[busiest]:.2f}", xy=((x1 + x2) / 2, (y1 + y2) / 2),
-                    xytext=(6, 6), textcoords="offset points", fontsize=plt.rcParams["legend.fontsize"],
-                    color=INK, bbox={"boxstyle": "round,pad=0.2", "fc": "white", "ec": AXIS, "lw": 0.5},
-                    arrowprops={"arrowstyle": "-", "color": INK_2, "lw": 0.6}, zorder=4)
         ax.set_aspect("equal")
         ax.set_xlim(-2, 52)
         ax.set_ylim(-2, 52)
@@ -513,7 +589,90 @@ def plot_topology(results_dir: Path, out_dir: Path, style: Style,
         Line2D([], [], color=INK, marker="o", linestyle="", markeredgecolor="white", label="trusted node"),
     ]
     fig.legend(handles=handles, loc="outside upper center", ncol=3 if not style.ieee else 1)
+
+    # Label the busiest edge in free space, joined by a thin leader line. Placement needs the
+    # final layout (data -> pixel transform), so draw once first.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    for ax, (mesh, G, shares, bridges) in zip(axes[0], graphs):
+        pos = nx.get_node_attributes(G, "pos")
+        edges = list(G.edges)
+        busiest = max(shares, key=shares.get)
+        anchor = tuple((np.asarray(pos[busiest[0]]) + np.asarray(pos[busiest[1]])) / 2)
+        segments = [(pos[u], pos[v]) for u, v in edges]
+        skip = next(i for i, (u, v) in enumerate(edges) if {u, v} == set(busiest))
+        text = f"busiest: b = {shares[busiest]:.2f}"
+        xytext = _free_label_position(ax, renderer, text, anchor, segments, list(pos.values()), skip)
+        ax.annotate(text, xy=anchor, xytext=xytext, textcoords="data", ha="center", va="center",
+                    fontsize=plt.rcParams["legend.fontsize"], color=INK, bbox=LABEL_BOX, zorder=4,
+                    arrowprops={"arrowstyle": "-", "color": INK_2, "lw": 0.6,
+                                "shrinkA": 0, "shrinkB": 1})
     return save(fig, out_dir, "topo_mesh0_vs_diverse", style)
+
+
+LABEL_BOX = {"boxstyle": "round,pad=0.2", "fc": "white", "ec": AXIS, "lw": 0.5}
+
+
+def _segment_hits_rect(p, q, rect) -> bool:
+    """Does segment p-q intersect the axis-aligned rectangle (x0, y0, x1, y1)? (Liang-Barsky)"""
+    x0, y0, x1, y1 = rect
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    t_lo, t_hi = 0.0, 1.0
+    for pk, qk in ((-dx, p[0] - x0), (dx, x1 - p[0]), (-dy, p[1] - y0), (dy, y1 - p[1])):
+        if pk == 0:
+            if qk < 0:
+                return False
+            continue
+        t = qk / pk
+        if pk < 0:
+            t_lo = max(t_lo, t)
+        else:
+            t_hi = min(t_hi, t)
+        if t_lo > t_hi:
+            return False
+    return True
+
+
+def _segments_cross(a, b, c, d) -> bool:
+    """Proper intersection of segments a-b and c-d (touching endpoints do not count)."""
+    def orient(p, q, r):
+        return np.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]))
+    return (orient(a, b, c) * orient(a, b, d) < 0) and (orient(c, d, a) * orient(c, d, b) < 0)
+
+
+def _free_label_position(ax: plt.Axes, renderer, text: str, anchor, segments, points,
+                         skip: int) -> tuple[float, float]:
+    """A label centre for the edge at `anchor` (data coords), searched on rings of growing
+    radius and kept inside the axes. Candidates are ranked by: edges and nodes the label
+    box touches (0 wanted), then edges the leader line crosses, then distance. The search
+    stops at the first ring that yields a touch-free, crossing-free spot."""
+    fontsize = plt.rcParams["legend.fontsize"]
+    pad_px = 0.6 * fontsize * renderer.points_to_pixels(1.0)  # bbox pad + clearance
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    inv = ax.transData.inverted()
+    best: tuple[tuple[int, int, float], tuple[float, float]] | None = None
+    for radius in (5, 7, 9, 12, 15, 19, 24, 30, 36, 42, 48):
+        for angle in range(0, 360, 10):
+            cx = anchor[0] + radius * np.cos(np.radians(angle))
+            cy = anchor[1] + radius * np.sin(np.radians(angle))
+            probe = ax.text(cx, cy, text, ha="center", va="center", fontsize=fontsize)
+            bb = probe.get_window_extent(renderer)
+            probe.remove()
+            (x0, y0), (x1, y1) = inv.transform([(bb.x0 - pad_px, bb.y0 - pad_px),
+                                                (bb.x1 + pad_px, bb.y1 + pad_px)])
+            rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+            if rect[0] < xlim[0] or rect[2] > xlim[1] or rect[1] < ylim[0] or rect[3] > ylim[1]:
+                continue
+            touches = (sum(_segment_hits_rect(p, q, rect) for p, q in segments)
+                       + sum(rect[0] <= px <= rect[2] and rect[1] <= py <= rect[3] for px, py in points))
+            crossings = sum(_segments_cross((cx, cy), anchor, p, q)
+                            for i, (p, q) in enumerate(segments) if i != skip)
+            key = (touches, crossings, radius)
+            if best is None or key < best[0]:
+                best = (key, (cx, cy))
+        if best is not None and best[0][:2] == (0, 0):
+            break  # touch-free and crossing-free at this radius: stop looking further out
+    return best[1] if best else (anchor[0] + 3.0, anchor[1] + 3.0)
 
 
 # --------------------------------------------------------------------------- CLI
@@ -534,8 +693,8 @@ SOURCE = {"e1_chain_hops": "e1_chain_hops", "e2_mesh_load": "e2_mesh_load",
 
 
 def make_plots(names: Sequence[str], results_dir: Path, out_dir: Path, ieee: bool = False,
-               skip_missing: bool = False) -> list[Path]:
-    style = Style(ieee)
+               skip_missing: bool = False, talk: bool = False) -> list[Path]:
+    style = Style(ieee=ieee, talk=talk)
     written: list[Path] = []
     for name in names:
         if skip_missing and not (results_dir / SOURCE[name] / "summary.csv").exists():
@@ -556,7 +715,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     which.add_argument("--all", action="store_true", help="every experiment with results")
     parser.add_argument("--results-dir", default=str(REPO_ROOT / "results"))
     parser.add_argument("--out-dir", default=str(REPO_ROOT / "figures"))
-    parser.add_argument("--ieee", action="store_true", help="3.5 in single-column width")
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("--ieee", action="store_true", help="3.5 in single-column width (*_ieee.*)")
+    target.add_argument("--talk", action="store_true",
+                        help=f"16:9 slides ({TALK_SIZE[0]} x {TALK_SIZE[1]} in), larger type; "
+                             "written to <out-dir>/talk/ with the same file names")
     args = parser.parse_args(argv)
 
     if args.all:
@@ -566,7 +729,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if name not in PLOTTERS:
             parser.error(f"unknown experiment {args.exp!r}; choose from {list(EXPERIMENTS)}")
         names, skip = [name], False
-    make_plots(names, Path(args.results_dir), Path(args.out_dir), args.ieee, skip)
+    make_plots(names, Path(args.results_dir), Path(args.out_dir), args.ieee, skip, talk=args.talk)
     return 0
 
 

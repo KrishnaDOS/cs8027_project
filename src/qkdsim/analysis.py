@@ -170,6 +170,24 @@ def per_topology_reduction(summary: pd.DataFrame,
     return wide.rename(columns={degree_key: "target_degree"})
 
 
+def spearman(x: Sequence[float], y: Sequence[float]) -> float:
+    """Spearman rank correlation (average ranks for ties); NaN if fewer than 3 points or
+    either variable is constant. Pure pandas/numpy, no SciPy needed."""
+    df = pd.DataFrame({"x": x, "y": y}).dropna()
+    if len(df) < 3:
+        return float("nan")
+    rx, ry = df["x"].rank(method="average"), df["y"].rank(method="average")
+    if rx.std() == 0 or ry.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(rx, ry)[0, 1])
+
+
+def bridge_share_for_cut(k: int, n: int) -> float:
+    """Share of ordered node pairs crossing a bridge that cuts k of n nodes off:
+    2k(n-k) / (n(n-1))."""
+    return 2 * k * (n - k) / (n * (n - 1))
+
+
 def relative_reduction(spr_mean: float, kar_mean: float) -> float:
     """1 - KAR/SPR on mean outage (NaN when SPR has no outage)."""
     return 1.0 - kar_mean / spr_mean if spr_mean > 0 else float("nan")

@@ -15,12 +15,14 @@ import pytest
 from qkdsim.analysis import (
     bin_label,
     binned_by_hops,
+    bridge_share_for_cut,
     e3_per_degree,
     hop_bins,
     key_size_bits,
     mean_ci,
     paired_difference,
     per_topology_reduction,
+    spearman,
     t_crit_95,
 )
 from qkdsim.config import config_from_dict
@@ -253,6 +255,63 @@ def test_make_plots_ieee_width(results_dir: Path, tmp_path: Path) -> None:
     assert sorted(p.name for p in out.iterdir()) == ["e4_secoqc_bars_ieee.pdf", "e4_secoqc_bars_ieee.png"]
     width_px = Image.open(out / "e4_secoqc_bars_ieee.png").size[0]
     assert width_px == 3.5 * 200  # exactly one IEEE column at 200 dpi
+
+
+def test_make_plots_talk_path_and_size(results_dir: Path, tmp_path: Path) -> None:
+    from PIL import Image
+
+    make_plots = load_script("make_plots")
+    out = tmp_path / "figs"
+    make_plots.main(["--exp", "e4", "--talk", "--results-dir", str(results_dir), "--out-dir", str(out)])
+    # Same file names as the default set, in <out-dir>/talk/, and nothing else written.
+    assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()) == [
+        "talk/e4_secoqc_bars.pdf", "talk/e4_secoqc_bars.png"]
+    width_px, height_px = Image.open(out / "talk" / "e4_secoqc_bars.png").size
+    assert (width_px, height_px) == (round(13.33 * 200), 7.5 * 200)  # exact 16:9 slide at 200 dpi
+    with pytest.raises(SystemExit):  # --talk and --ieee are mutually exclusive
+        make_plots.main(["--exp", "e4", "--talk", "--ieee", "--results-dir", str(results_dir),
+                         "--out-dir", str(out)])
+
+
+def test_make_plots_talk_all_figures(results_dir: Path, tmp_path: Path) -> None:
+    make_plots = load_script("make_plots")
+    out = tmp_path / "figs"
+    make_plots.main(["--all", "--talk", "--results-dir", str(results_dir), "--out-dir", str(out)])
+    expected = expected_files(out / "talk", [n for names in FIGURES.values() for n in names])
+    assert all(f.exists() for f in expected)
+    assert not any(p.is_file() for p in out.iterdir())  # default-set location untouched
+
+
+def test_bridge_share_for_cut_and_spearman() -> None:
+    assert bridge_share_for_cut(9, 30) == pytest.approx(0.434483, abs=1e-6)   # mesh0's bridge
+    assert bridge_share_for_cut(2, 30) == pytest.approx(0.128736, abs=1e-6)   # diverse mesh
+    assert bridge_share_for_cut(15, 30) == pytest.approx(450 / 870)
+    assert spearman([1, 2, 3, 4], [10, 20, 30, 40]) == pytest.approx(1.0)
+    assert spearman([1, 2, 3, 4], [4, 3, 2, 1]) == pytest.approx(-1.0)
+    x, y = [0.1, 0.2, 0.2, 0.4, 0.5], [0.9, 0.5, 0.7, 0.1, 0.0]  # with a tie in x
+    expected = pd.DataFrame({"x": x, "y": y}).corr(method="spearman").iloc[0, 1]
+    assert spearman(x, y) == pytest.approx(expected)
+    assert np.isnan(spearman([1, 2], [3, 4]))
+
+
+def test_kar_zero_outage_limit() -> None:
+    make_plots = load_script("make_plots")
+    rows = [{"traffic.offered_load": r, "routing.strategy": "kar", "outage_probability": o}
+            for r, o in ((0.1, 0.0), (0.2, 0.0), (0.4, 0.0), (0.6, 0.15), (0.8, 0.0))]
+    assert make_plots.kar_zero_outage_limit(pd.DataFrame(rows)) == 0.4  # first run of zeros only
+    rows[0]["outage_probability"] = 0.01
+    assert make_plots.kar_zero_outage_limit(pd.DataFrame(rows)) is None
+
+
+def test_topology_label_geometry() -> None:
+    make_plots = load_script("make_plots")
+    rect = (0.0, 0.0, 2.0, 1.0)
+    assert make_plots._segment_hits_rect((-1, 0.5), (3, 0.5), rect)      # passes through
+    assert make_plots._segment_hits_rect((1, 0.5), (5, 5), rect)         # starts inside
+    assert not make_plots._segment_hits_rect((-1, 2), (3, 2), rect)      # above
+    assert not make_plots._segment_hits_rect((3, -1), (4, 5), rect)      # to the right
+    assert make_plots._segments_cross((0, 0), (2, 2), (0, 2), (2, 0))
+    assert not make_plots._segments_cross((0, 0), (1, 1), (1, 1), (2, 0))  # shared endpoint
 
 
 def test_make_plots_skips_missing_experiments(results_dir: Path, tmp_path: Path) -> None:

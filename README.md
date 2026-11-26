@@ -35,10 +35,15 @@ Numbers are means across seeds with 95% t-intervals, taken from
   SPR and 0.003 ± 0.004 for KAR, a difference of about 1.2 percentage points, and SPR's
   interval includes zero.
 - **Headline figure** (`e3_gain_vs_bridge_share`): each topology's KAR gain against its
-  largest bridge share, for E3 and E3b. Large gains occur only on topologies whose largest
-  bridge carries a small share of node pairs; meshes dominated by one bridge gain little.
-  Topologies where SPR has no outage are omitted (the reduction is undefined there); the
-  panel titles give the counts.
+  largest bridge share, for E3 and E3b (Spearman rank correlation r_s = −0.88 over 79
+  topologies in E3, −0.72 over 55 in E3b). A high bridge share caps the gain: traffic that
+  must cross a bridge has no alternative path, so KAR cannot relieve it. A low share makes
+  large gains possible but does not guarantee them; some low-share topologies gain little.
+  The share has a direct reading, shown on the figure's top axis: a bridge that cuts k of
+  n nodes off carries 2k(n − k) / (n(n − 1)) of all node pairs. For n = 30 that is 0.067
+  for k = 1, 0.129 for k = 2 (the E2 diverse mesh), 0.239 for k = 4, 0.434 for k = 9 (mesh0)
+  and 0.517 for k = 15. Topologies where SPR has no outage are omitted (the reduction is
+  undefined there); the panel titles give the counts.
 - **SPR concentrates load.** Links saturate far below ρ = 1: SPR's busiest link saturates
   at ρ_sat = 0.688 on the 32-node chain, 0.100 on SECOQC, and on average 0.171 on the
   degree-4 E3 meshes (0.216 at degree 3 down to 0.129 at degree 8).
@@ -139,7 +144,7 @@ pip install -e .
 ## Test
 
 ```bash
-python -m pytest            # 136 tests, under a minute
+python -m pytest            # 142 tests, under a minute
 ```
 
 ## Run
@@ -154,6 +159,20 @@ python -m qkdsim.run --config configs/default.yaml --set routing.strategy=kar --
 `--set` takes dotted keys (values parsed as YAML). The summary includes λ and ρ, the SPR
 bottleneck diagnostics (`rho_bn`, `rho_sat`, bridges), outage, throughput, latency and key
 utilization.
+
+## Live demo
+
+`scripts/demo.ps1` runs the E2 `diverse` mesh (topology seed 8) at ρ = 0.3 with SPR, then
+KAR, and prints outage, delivered throughput and mean hops side by side. It uses
+`experiments/configs/demo_diverse.yaml` and takes a few seconds in total.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\demo.ps1
+```
+
+It uses the project's `.venv` if present, otherwise `python` on PATH. The demo simulates
+120 s (20 s warm-up, one seed) instead of E2's 600 s (60 s warm-up, five seeds), so its
+numbers differ slightly from the E2 results in `figures/tables.md`.
 
 ## Experiments
 
@@ -198,6 +217,7 @@ than in E3 and denser meshes less.
 ```bash
 python scripts/make_plots.py --all            # PNG (200 dpi) + PDF in figures/
 python scripts/make_plots.py --all --ieee     # 3.5 in single-column versions, *_ieee.*
+python scripts/make_plots.py --all --talk     # 16:9 slides (13.33 x 7.5 in, larger type) in figures/talk/
 python scripts/make_plots.py --exp e2         # one experiment (e1, e2, e3, e3b, e4, topo)
 python scripts/make_tables.py                 # figures/tables.md
 ```
@@ -209,7 +229,7 @@ traffic randomness on a fixed topology only (see Main results).
 
 | Figure | Content |
 |---|---|
-| `e3_gain_vs_bridge_share` | **headline:** KAR's relative outage reduction vs max bridge share, one dot per topology, colored by degree; E3 (left) and E3b (right) |
+| `e3_gain_vs_bridge_share` | **headline:** KAR's relative outage reduction vs max bridge share, one dot per topology, colored by degree; E3 (left) and E3b (right); top axis: nodes cut off by the worst bridge; Spearman r_s in each title |
 | `e1_outage_vs_hops`, `e1_latency_vs_hops` | chain: outage and mean latency (delivered requests) vs hop count in ~6 bins (1–5, …, 26–31), one line per ρ |
 | `e2_outage_vs_rho`, `e2_throughput_vs_rho`, `e2_utilization_vs_rho` | both meshes side by side, `rho_sat` marked; throughput with the offered-load line |
 | `e2_latency_vs_rho` | p95 latency above outage (latency alone hides survivorship bias) |

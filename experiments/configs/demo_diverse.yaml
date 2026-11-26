@@ -1,0 +1,17 @@
+# Live demo: SPR vs KAR on the E2 "diverse" mesh (topology seed 8; largest bridge share 0.129).
+# This is a simulator config (like configs/default.yaml), not a sweep: keys not set here take
+# the defaults. Run with scripts/demo.ps1, or one router at a time:
+#   python -m qkdsim.run --config experiments/configs/demo_diverse.yaml --set routing.strategy=kar
+# Shortened from E2 (600 s, 60 s warm-up) so both runs finish in a few seconds; at rho = 0.3
+# this mesh is above SPR's saturation point (rho_sat = 0.172), where KAR's advantage shows.
+simulation:
+  duration_s: 120
+  warmup_s: 20
+  seeds: [0]
+topology:
+  type: random_mesh
+  seed: 8
+traffic:
+  offered_load: 0.3
+routing:
+  strategy: spr

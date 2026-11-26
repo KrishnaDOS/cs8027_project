@@ -123,6 +123,17 @@ def test_e2_diverse_seed_matches_selection_rule() -> None:
     assert rows[0]["bottleneck_is_bridge"]
 
 
+def test_demo_config_matches_e2_diverse_mesh(tmp_path: Path) -> None:
+    demo = load_config(CONFIGS / "demo_diverse.yaml")
+    assert (demo.simulation.duration_s, demo.simulation.warmup_s) == (120, 20)
+    assert demo.traffic.offered_load == 0.3
+    e2 = load_experiment(CONFIGS / "e2_mesh_load.yaml", results_dir=tmp_path)
+    diverse = next(r for r in e2.runs if r.variant == "diverse")
+    assert demo.topology.seed == diverse.config["topology"]["seed"]
+    # Same mesh as E2 apart from the topology seed being the only topology override.
+    assert {k: v for k, v in demo.to_dict()["topology"].items()} == diverse.config["topology"]
+
+
 def test_nest_dotted() -> None:
     assert nest_dotted({"a.b": 1, "a.c": 2, "d": 3}) == {"a": {"b": 1, "c": 2}, "d": 3}
 
